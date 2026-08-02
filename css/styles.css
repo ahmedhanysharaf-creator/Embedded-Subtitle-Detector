@@ -570,6 +570,14 @@ body {
   border-color: var(--success);
 }
 
+.filter-chip.chip-warning.active {
+  background: var(--warning);
+  border-color: var(--warning);
+  color: #000;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4);
+}
+
 .filter-chip.chip-danger.active {
   background: var(--danger);
   border-color: var(--danger);

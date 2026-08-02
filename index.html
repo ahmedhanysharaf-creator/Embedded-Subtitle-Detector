@@ -126,37 +126,47 @@
             </div>
             <div class="stat-data">
               <span class="stat-value" id="statTotalFiles">0</span>
-              <span class="stat-label">Total Videos</span>
+              <span class="stat-label">Total Movies</span>
             </div>
           </div>
 
           <div class="stat-card">
             <div class="stat-icon bg-success-soft">
-              <i class="fa-solid fa-closed-captioning text-success"></i>
+              <i class="fa-solid fa-circle-check text-success"></i>
             </div>
             <div class="stat-data">
               <span class="stat-value text-success" id="statSubtitledCount">0</span>
-              <span class="stat-label">With Built-in Subtitles</span>
+              <span class="stat-label">Total Subtitled</span>
             </div>
           </div>
 
           <div class="stat-card">
-            <div class="stat-icon bg-danger-soft">
-              <i class="fa-solid fa-circle-xmark text-danger"></i>
+            <div class="stat-icon bg-warning-soft">
+              <i class="fa-solid fa-language text-warning"></i>
             </div>
             <div class="stat-data">
-              <span class="stat-value text-danger" id="statNoSubCount">0</span>
-              <span class="stat-label">No Subtitles Found</span>
+              <span class="stat-value text-warning" id="statHardsubCount">0</span>
+              <span class="stat-label">Hardcoded Arabic</span>
             </div>
           </div>
 
           <div class="stat-card">
             <div class="stat-icon bg-accent-soft">
-              <i class="fa-solid fa-chart-pie text-accent"></i>
+              <i class="fa-solid fa-layer-group text-accent"></i>
             </div>
             <div class="stat-data">
-              <span class="stat-value text-accent" id="statCoveragePct">0%</span>
-              <span class="stat-label">Subtitle Ratio</span>
+              <span class="stat-value text-accent" id="statSoftsubCount">0</span>
+              <span class="stat-label">Softsubbed Streams</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon bg-success-soft">
+              <i class="fa-solid fa-chart-pie text-success"></i>
+            </div>
+            <div class="stat-data">
+              <span class="stat-value text-success" id="statCoveragePct">0%</span>
+              <span class="stat-label">Subtitle Coverage</span>
             </div>
           </div>
         </div>
@@ -172,9 +182,10 @@
           <div class="filter-group">
             <span class="filter-label"><i class="fa-solid fa-filter"></i> Filter:</span>
             <button class="filter-chip active" data-filter="all">All (<span id="countAll">0</span>)</button>
-            <button class="filter-chip chip-success" data-filter="has-subs">Has Subtitles (<span id="countHasSubs">0</span>)</button>
-            <button class="filter-chip chip-danger" data-filter="no-subs">No Subtitles (<span id="countNoSubs">0</span>)</button>
-            <button class="filter-chip chip-accent" data-filter="multi-subs">Multi-Lang (<span id="countMultiSubs">0</span>)</button>
+            <button class="filter-chip chip-success" data-filter="has-subs">Subtitled (<span id="countHasSubs">0</span>)</button>
+            <button class="filter-chip chip-warning" data-filter="hard-subs">Hardcoded Arabic (<span id="countHardSubs">0</span>)</button>
+            <button class="filter-chip chip-accent" data-filter="soft-subs">Softsubbed (<span id="countSoftSubs">0</span>)</button>
+            <button class="filter-chip chip-danger" data-filter="no-subs">Missing Subs (<span id="countNoSubs">0</span>)</button>
           </div>
 
           <div class="action-tools">

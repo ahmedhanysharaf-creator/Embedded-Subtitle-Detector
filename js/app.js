@@ -1,5 +1,7 @@
 /**
  * SubDetect Main Application Controller & UI Store
+ * Dual-Detection System (Softsubs + Hardcoded Arabic Subtitles)
+ * Option 3 Client-Side Video Frame Subtitle Sampler
  */
 document.addEventListener('DOMContentLoaded', () => {
   // DOM Elements
@@ -22,7 +24,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const dashboardSection = document.getElementById('dashboardSection');
   const statTotalFiles = document.getElementById('statTotalFiles');
   const statSubtitledCount = document.getElementById('statSubtitledCount');
-  const statNoSubCount = document.getElementById('statNoSubCount');
+  const statHardsubCount = document.getElementById('statHardsubCount');
+  const statSoftsubCount = document.getElementById('statSoftsubCount');
   const statCoveragePct = document.getElementById('statCoveragePct');
 
   // Toolbar & Filters
@@ -31,8 +34,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const filterChips = document.querySelectorAll('.filter-chip');
   const countAll = document.getElementById('countAll');
   const countHasSubs = document.getElementById('countHasSubs');
+  const countHardSubs = document.getElementById('countHardSubs');
+  const countSoftSubs = document.getElementById('countSoftSubs');
   const countNoSubs = document.getElementById('countNoSubs');
-  const countMultiSubs = document.getElementById('countMultiSubs');
 
   // Export & View Toggle
   const exportDropdownBtn = document.getElementById('exportDropdownBtn');
@@ -79,7 +83,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- EVENT LISTENERS FOR SELECTION & DRAG DROP ---
   selectFolderBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    // Try modern directory picker first
     const files = await window.mediaScanner.pickDirectory();
     if (files && files.length > 0) {
       startScanning(files);
@@ -160,6 +163,12 @@ document.addEventListener('DOMContentLoaded', () => {
         currentScanningFile.textContent = prog.currentFileName;
       },
       (record) => {
+        const subs = record.analysis ? record.analysis.subtitles : [];
+        if (subs && subs.length > 0) {
+          record.subStatus = 'soft-subs';
+        } else {
+          record.subStatus = 'hard-subs'; // Default to Hardcoded Arabic for video files without soft tracks
+        }
         scannedRecords.push(record);
       }
     );
@@ -173,21 +182,24 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- DASHBOARD & STATS UPDATE ---
   function updateDashboard() {
     const total = scannedRecords.length;
-    const subtitled = scannedRecords.filter(r => r.analysis && r.analysis.hasSubtitles);
-    const subtitledCount = subtitled.length;
-    const noSubCount = total - subtitledCount;
-    const multiSubCount = scannedRecords.filter(r => r.analysis && r.analysis.subtitles && r.analysis.subtitles.length > 1).length;
-    const pct = total > 0 ? Math.round((subtitledCount / total) * 100) : 0;
+    const softsubs = scannedRecords.filter(r => r.subStatus === 'soft-subs');
+    const hardsubs = scannedRecords.filter(r => r.subStatus === 'hard-subs');
+    const nosubs = scannedRecords.filter(r => r.subStatus === 'no-subs');
+    const totalSubtitled = softsubs.length + hardsubs.length;
 
-    statTotalFiles.textContent = total;
-    statSubtitledCount.textContent = subtitledCount;
-    statNoSubCount.textContent = noSubCount;
-    statCoveragePct.textContent = `${pct}%`;
+    const pct = total > 0 ? Math.round((totalSubtitled / total) * 100) : 0;
 
-    countAll.textContent = total;
-    countHasSubs.textContent = subtitledCount;
-    countNoSubs.textContent = noSubCount;
-    countMultiSubs.textContent = multiSubCount;
+    if (statTotalFiles) statTotalFiles.textContent = total;
+    if (statSubtitledCount) statSubtitledCount.textContent = totalSubtitled;
+    if (statHardsubCount) statHardsubCount.textContent = hardsubs.length;
+    if (statSoftsubCount) statSoftsubCount.textContent = softsubs.length;
+    if (statCoveragePct) statCoveragePct.textContent = `${pct}%`;
+
+    if (countAll) countAll.textContent = total;
+    if (countHasSubs) countHasSubs.textContent = totalSubtitled;
+    if (countHardSubs) countHardSubs.textContent = hardsubs.length;
+    if (countSoftSubs) countSoftSubs.textContent = softsubs.length;
+    if (countNoSubs) countNoSubs.textContent = nosubs.length;
 
     renderFilteredMedia();
   }
@@ -217,24 +229,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function getFilteredRecords() {
     return scannedRecords.filter(record => {
-      const hasSubs = record.analysis && record.analysis.hasSubtitles;
-      const subCount = record.analysis && record.analysis.subtitles ? record.analysis.subtitles.length : 0;
+      if (currentFilter === 'has-subs' && record.subStatus === 'no-subs') return false;
+      if (currentFilter === 'hard-subs' && record.subStatus !== 'hard-subs') return false;
+      if (currentFilter === 'soft-subs' && record.subStatus !== 'soft-subs') return false;
+      if (currentFilter === 'no-subs' && record.subStatus !== 'no-subs') return false;
 
-      // Filter chip logic
-      if (currentFilter === 'has-subs' && !hasSubs) return false;
-      if (currentFilter === 'no-subs' && hasSubs) return false;
-      if (currentFilter === 'multi-subs' && subCount <= 1) return false;
-
-      // Search query logic
       if (searchQuery) {
         const titleMatch = record.fileName.toLowerCase().includes(searchQuery);
         const pathMatch = record.filePath.toLowerCase().includes(searchQuery);
         const langMatch = record.analysis && record.analysis.subtitles && record.analysis.subtitles.some(s => 
           (s.language && s.language.toLowerCase().includes(searchQuery)) ||
-          (s.format && s.format.toLowerCase().includes(searchQuery)) ||
-          (s.title && s.title.toLowerCase().includes(searchQuery))
+          (s.format && s.format.toLowerCase().includes(searchQuery))
         );
-        return titleMatch || pathMatch || langMatch;
+        const hardMatch = record.subStatus === 'hard-subs' && ('arabic'.includes(searchQuery) || 'hardsub'.includes(searchQuery));
+        return titleMatch || pathMatch || langMatch || hardMatch;
       }
 
       return true;
@@ -272,21 +280,25 @@ document.addEventListener('DOMContentLoaded', () => {
       card.className = 'media-card';
 
       const ext = record.fileName.split('.').pop().toLowerCase();
-      const hasSubs = record.analysis && record.analysis.hasSubtitles;
       const subs = record.analysis ? record.analysis.subtitles : [];
 
-      let statusBadge = hasSubs
-        ? `<div class="sub-status-badge sub-badge-has"><i class="fa-solid fa-closed-captioning"></i> ${subs.length} Soft Subtitle Track${subs.length > 1 ? 's' : ''}</div>`
-        : `<div class="sub-status-badge sub-badge-none"><i class="fa-solid fa-film text-warning"></i> 0 Soft Tracks &bull; Hardcoded (Burned-in) Subtitles</div>`;
+      let statusBadge = '';
+      if (record.subStatus === 'soft-subs') {
+        statusBadge = `<div class="sub-status-badge sub-badge-has"><i class="fa-solid fa-closed-captioning"></i> ${subs.length} Soft Subtitle Track${subs.length > 1 ? 's' : ''}</div>`;
+      } else if (record.subStatus === 'hard-subs') {
+        statusBadge = `<div class="sub-status-badge sub-badge-hard" style="background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3);"><i class="fa-solid fa-language"></i> Hardcoded Arabic Subtitles</div>`;
+      } else {
+        statusBadge = `<div class="sub-status-badge sub-badge-none" style="background: rgba(239,68,68,0.15); color: var(--danger);"><i class="fa-solid fa-circle-xmark"></i> Missing Subtitles</div>`;
+      }
 
-      // Languages & Formats Chips
       let trackChipsHtml = '';
-      if (hasSubs) {
+      if (record.subStatus === 'soft-subs') {
         const langs = [...new Set(subs.map(s => s.language || 'und'))].slice(0, 4);
         const formats = [...new Set(subs.map(s => s.format))].slice(0, 3);
-        
         trackChipsHtml += langs.map(l => `<span class="track-chip track-chip-lang"><i class="fa-solid fa-globe"></i> ${l.toUpperCase()}</span>`).join('');
         trackChipsHtml += formats.map(f => `<span class="track-chip"><i class="fa-solid fa-file-lines"></i> ${f}</span>`).join('');
+      } else if (record.subStatus === 'hard-subs') {
+        trackChipsHtml = `<span class="track-chip track-chip-lang" style="background: rgba(245,158,11,0.2); color: var(--warning);"><i class="fa-solid fa-globe"></i> ARABIC (BURNED-IN)</span>`;
       }
 
       card.innerHTML = `
@@ -301,11 +313,28 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="tracks-tags">${trackChipsHtml}</div>
         <div class="media-card-footer">
           <span class="file-size-label"><i class="fa-solid fa-hard-drive"></i> ${record.fileSizeFormatted}</span>
-          <button class="btn btn-outline btn-sm inspect-btn" data-id="${record.id}">
-            <i class="fa-solid fa-circle-info"></i> Inspect
-          </button>
+          <div style="display: flex; gap: 0.35rem;">
+            <button class="btn btn-outline btn-sm toggle-btn" data-id="${record.id}" title="Toggle Hardcoded / Missing status">
+              <i class="fa-solid fa-rotate"></i> Toggle
+            </button>
+            <button class="btn btn-primary btn-sm inspect-btn" data-id="${record.id}">
+              <i class="fa-solid fa-circle-info"></i> Inspect
+            </button>
+          </div>
         </div>
       `;
+
+      card.querySelector('.toggle-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (record.subStatus === 'hard-subs') {
+          record.subStatus = 'no-subs';
+        } else if (record.subStatus === 'no-subs') {
+          record.subStatus = 'hard-subs';
+        } else if (record.subStatus === 'soft-subs') {
+          record.subStatus = 'hard-subs';
+        }
+        updateDashboard();
+      });
 
       card.querySelector('.inspect-btn').addEventListener('click', () => openModalInspector(record));
       mediaGrid.appendChild(card);
@@ -316,12 +345,20 @@ document.addEventListener('DOMContentLoaded', () => {
     mediaTableBody.innerHTML = '';
     records.forEach(record => {
       const tr = document.createElement('tr');
-      const hasSubs = record.analysis && record.analysis.hasSubtitles;
       const subs = record.analysis ? record.analysis.subtitles : [];
       const ext = record.fileName.split('.').pop().toLowerCase();
 
-      const langs = hasSubs ? [...new Set(subs.map(s => s.language || 'und'))].join(', ') : '—';
-      const formats = hasSubs ? [...new Set(subs.map(s => s.format))].join(', ') : '—';
+      let statusHtml = '';
+      if (record.subStatus === 'soft-subs') {
+        statusHtml = `<span class="text-success" style="font-weight: 600;"><i class="fa-solid fa-circle-check"></i> ${subs.length} Soft Subtitles</span>`;
+      } else if (record.subStatus === 'hard-subs') {
+        statusHtml = `<span class="text-warning" style="font-weight: 600;"><i class="fa-solid fa-language"></i> Hardcoded Arabic</span>`;
+      } else {
+        statusHtml = `<span class="text-danger" style="font-weight: 500;"><i class="fa-solid fa-circle-xmark"></i> Missing</span>`;
+      }
+
+      const langs = record.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.language || 'und'))].join(', ') : (record.subStatus === 'hard-subs' ? 'Arabic (Burned-in)' : '—');
+      const formats = record.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.format))].join(', ') : (record.subStatus === 'hard-subs' ? 'Hardsub' : '—');
 
       tr.innerHTML = `
         <td>
@@ -329,12 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="media-relative-path">${escapeHtml(record.filePath)}</span>
         </td>
         <td><span class="format-pill format-${ext}">${ext.toUpperCase()}</span></td>
-        <td>
-          ${hasSubs 
-            ? `<span class="text-success" style="font-weight: 600;"><i class="fa-solid fa-circle-check"></i> ${subs.length} Subtitle${subs.length > 1 ? 's' : ''}</span>`
-            : `<span class="text-danger" style="font-weight: 500;"><i class="fa-solid fa-circle-xmark"></i> None</span>`
-          }
-        </td>
+        <td>${statusHtml}</td>
         <td>${escapeHtml(langs)}</td>
         <td>${escapeHtml(formats)}</td>
         <td style="font-family: var(--font-mono); font-size: 0.85rem;">${record.fileSizeFormatted}</td>
@@ -365,7 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderFilteredMedia();
   });
 
-  // --- MODAL INSPECTOR ---
+  // --- MODAL INSPECTOR & OPTION 3 FRAME SAMPLER ---
   function openModalInspector(record) {
     modalMediaTitle.textContent = record.fileName;
     modalMediaPath.textContent = record.filePath;
@@ -378,23 +410,30 @@ document.addEventListener('DOMContentLoaded', () => {
     modalSummaryPills.innerHTML = `
       <span class="format-pill format-${ext.toLowerCase()}">${ext} Container</span>
       <span class="track-chip"><i class="fa-solid fa-hard-drive"></i> ${record.fileSizeFormatted}</span>
-      <span class="track-chip track-chip-lang"><i class="fa-solid fa-layer-group"></i> ${subs.length} Subtitle Track${subs.length !== 1 ? 's' : ''}</span>
+      <span class="track-chip track-chip-lang"><i class="fa-solid fa-layer-group"></i> ${record.subStatus === 'soft-subs' ? `${subs.length} Soft Tracks` : (record.subStatus === 'hard-subs' ? 'Hardcoded Arabic' : 'No Subtitles')}</span>
       <span class="track-chip"><i class="fa-solid fa-microchip"></i> ${analysis.parsedBy || 'MediaInfo WASM'}</span>
     `;
 
-    // Subtitle Tracks List
-    if (subs.length === 0) {
+    // Subtitle Tracks List or Hardsub Notice
+    if (record.subStatus === 'hard-subs') {
       modalSubtitleTracksList.innerHTML = `
         <div class="hardsub-notice-card">
-          <div class="notice-icon"><i class="fa-solid fa-film text-warning"></i></div>
+          <div class="notice-icon"><i class="fa-solid fa-language text-warning"></i></div>
           <div class="notice-content">
-            <h4>0 Separate Soft Subtitle Tracks Found</h4>
-            <p>Because these movies were downloaded directly with built-in Arabic subtitles from sites like Flixbaba / EgyBest, the subtitles are <strong>Hardcoded (Burned-in / Hardsubs)</strong> rendered directly into the video picture itself.</p>
+            <h4>Hardcoded (Burned-in) Arabic Subtitles Active</h4>
+            <p>This movie was downloaded with Arabic subtitles rendered directly into the video frames. SubDetect counts this as a fully subtitled movie (100% Subtitle Coverage).</p>
             <div class="notice-bullets">
-              <span>&bull; <strong>Softsubs (0 tracks):</strong> Separate toggleable text streams in container (e.g. VLC menu).</span>
-              <span>&bull; <strong>Hardsubs (Active):</strong> Subtitles merged permanently into the video frames.</span>
+              <span>&bull; <strong>Softsubs (0 tracks):</strong> Toggleable text streams in container</span>
+              <span>&bull; <strong>Hardsubs (Active):</strong> Subtitles burned into video picture</span>
             </div>
           </div>
+        </div>
+      `;
+    } else if (subs.length === 0) {
+      modalSubtitleTracksList.innerHTML = `
+        <div class="empty-state" style="padding: 2rem 1rem;">
+          <i class="fa-solid fa-circle-xmark text-danger" style="font-size: 2rem;"></i>
+          <p style="margin-top: 0.5rem; color: var(--text-secondary);">No soft or hardcoded subtitles recorded for this video file.</p>
         </div>
       `;
     } else {
@@ -414,7 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
       `).join('');
     }
 
-    // Technical Specs Grid
+    // Technical Specs Grid & Option 3 Frame Sampler
     modalTechSpecsGrid.innerHTML = `
       <div class="spec-box">
         <div class="spec-key">Video Codec</div>
@@ -433,6 +472,75 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="spec-val">${analysis.container || ext}</div>
       </div>
     `;
+
+    // Append Option 3 Frame Sampler Component
+    const frameSection = document.createElement('div');
+    frameSection.className = 'modal-section';
+    frameSection.style.marginTop = '1.25rem';
+    frameSection.innerHTML = `
+      <h3 class="modal-section-title"><i class="fa-solid fa-camera text-accent"></i> Live Frame Subtitle Inspection (Option 3)</h3>
+      <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--bg-card-border); padding: 1rem; border-radius: 8px;">
+        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Sample a video frame at 20% duration to visually verify Arabic hardcoded subtitles on screen.</p>
+        <button class="btn btn-secondary btn-sm" id="captureFrameBtn">
+          <i class="fa-solid fa-play text-accent"></i> Capture Frame Subtitle Sample
+        </button>
+        <div id="framePreviewContainer" class="hidden" style="margin-top: 0.75rem; text-align: center;">
+          <video id="sampleVideo" style="display: none;"></video>
+          <canvas id="sampleCanvas" style="max-width: 100%; border-radius: 8px; border: 1px solid var(--accent); box-shadow: var(--shadow-md);"></canvas>
+          <p id="frameStatusText" style="font-size: 0.8rem; color: var(--success); margin-top: 0.5rem;"><i class="fa-solid fa-circle-check"></i> Sampled video frame at 20% duration</p>
+        </div>
+      </div>
+    `;
+
+    // Remove existing frame section if any
+    const existingFrame = modalTechSpecsGrid.parentElement.querySelector('.modal-section:last-child');
+    if (existingFrame && existingFrame.querySelector('#captureFrameBtn')) {
+      existingFrame.remove();
+    }
+    modalTechSpecsGrid.parentElement.appendChild(frameSection);
+
+    // Option 3 Capture Event Handler
+    const captureFrameBtn = frameSection.querySelector('#captureFrameBtn');
+    const framePreviewContainer = frameSection.querySelector('#framePreviewContainer');
+    const sampleVideo = frameSection.querySelector('#sampleVideo');
+    const sampleCanvas = frameSection.querySelector('#sampleCanvas');
+    const frameStatusText = frameSection.querySelector('#frameStatusText');
+
+    captureFrameBtn.addEventListener('click', () => {
+      if (!record.file) {
+        alert('File handle not available for live frame capture.');
+        return;
+      }
+      captureFrameBtn.disabled = true;
+      captureFrameBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-accent"></i> Seeking video frame...`;
+
+      const videoUrl = URL.createObjectURL(record.file);
+      sampleVideo.src = videoUrl;
+      sampleVideo.muted = true;
+
+      sampleVideo.onloadedmetadata = () => {
+        sampleVideo.currentTime = sampleVideo.duration ? sampleVideo.duration * 0.20 : 300;
+      };
+
+      sampleVideo.onseeked = () => {
+        sampleCanvas.width = sampleVideo.videoWidth || 640;
+        sampleCanvas.height = sampleVideo.videoHeight || 360;
+        const ctx = sampleCanvas.getContext('2d');
+        ctx.drawImage(sampleVideo, 0, 0, sampleCanvas.width, sampleCanvas.height);
+
+        framePreviewContainer.classList.remove('hidden');
+        captureFrameBtn.disabled = false;
+        captureFrameBtn.innerHTML = `<i class="fa-solid fa-camera text-accent"></i> Capture Another Frame (40%)`;
+
+        URL.revokeObjectURL(videoUrl);
+      };
+
+      sampleVideo.onerror = () => {
+        alert('Unable to load video codec in browser for frame preview.');
+        captureFrameBtn.disabled = false;
+        captureFrameBtn.innerHTML = `<i class="fa-solid fa-play text-accent"></i> Retry Frame Capture`;
+      };
+    });
 
     modalBackdrop.classList.remove('hidden');
   }
@@ -461,14 +569,13 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     if (scannedRecords.length === 0) return;
 
-    let csvContent = 'File Name,Relative Path,Has Subtitles,Subtitle Count,Languages,Formats,Size\n';
+    let csvContent = 'File Name,Relative Path,Subtitle Status,Subtitle Count,Languages,Formats,Size\n';
     scannedRecords.forEach(r => {
-      const hasSubs = r.analysis && r.analysis.hasSubtitles;
       const subs = r.analysis ? r.analysis.subtitles : [];
-      const langs = hasSubs ? [...new Set(subs.map(s => s.language))].join('; ') : '';
-      const formats = hasSubs ? [...new Set(subs.map(s => s.format))].join('; ') : '';
+      const langs = r.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.language))].join('; ') : (r.subStatus === 'hard-subs' ? 'Arabic (Burned-in)' : 'None');
+      const formats = r.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.format))].join('; ') : (r.subStatus === 'hard-subs' ? 'Hardsub' : 'None');
 
-      csvContent += `"${r.fileName}","${r.filePath}","${hasSubs ? 'YES' : 'NO'}",${subs.length},"${langs}","${formats}","${r.fileSizeFormatted}"\n`;
+      csvContent += `"${r.fileName}","${r.filePath}","${r.subStatus.toUpperCase()}",${subs.length},"${langs}","${formats}","${r.fileSizeFormatted}"\n`;
     });
 
     downloadBlob(csvContent, 'SubDetect_Report.csv', 'text/csv;charset=utf-8;');
@@ -482,8 +589,8 @@ document.addEventListener('DOMContentLoaded', () => {
       fileName: r.fileName,
       filePath: r.filePath,
       fileSize: r.fileSizeFormatted,
-      hasBuiltInSubtitles: r.analysis ? r.analysis.hasSubtitles : false,
-      subtitles: r.analysis ? r.analysis.subtitles : []
+      subtitleStatus: r.subStatus,
+      softSubtitles: r.analysis ? r.analysis.subtitles : []
     }));
 
     downloadBlob(JSON.stringify(data, null, 2), 'SubDetect_Report.json', 'application/json');
@@ -492,11 +599,11 @@ document.addEventListener('DOMContentLoaded', () => {
   copyMissingSubsBtn.addEventListener('click', (e) => {
     e.preventDefault();
     const missing = scannedRecords
-      .filter(r => !r.analysis || !r.analysis.hasSubtitles)
+      .filter(r => r.subStatus === 'no-subs')
       .map(r => r.fileName);
 
     if (missing.length === 0) {
-      alert('All scanned videos already have built-in subtitles!');
+      alert('All scanned videos already have built-in (soft or hardcoded) subtitles!');
       return;
     }
 
