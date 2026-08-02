@@ -286,7 +286,18 @@ document.addEventListener('DOMContentLoaded', () => {
         trackChipsHtml = `<span class="track-chip" style="background: rgba(239,68,68,0.2); color: var(--danger);"><i class="fa-solid fa-ban"></i> RAW MOVIE</span>`;
       }
 
+      let thumbHtml = '';
+      if (record.thumbnailDataUrl) {
+        thumbHtml = `
+          <div class="card-thumb-container">
+            <img src="${record.thumbnailDataUrl}" class="card-thumb-img" alt="Frame Sample">
+            <span class="thumb-frame-tag"><i class="fa-solid fa-camera"></i> Sampled Frame</span>
+          </div>
+        `;
+      }
+
       card.innerHTML = `
+        ${thumbHtml}
         <div class="media-card-header">
           <div class="media-title-area">
             <div class="media-filename">${escapeHtml(record.fileName)}</div>

@@ -146,7 +146,7 @@ class MediaScanner {
   async analyzeVideoFrameSubtitles(file) {
     return new Promise((resolve) => {
       if (!file || !file.size) {
-        return resolve({ hasHardsubs: false, confidence: 0 });
+        return resolve({ hasHardsubs: false, confidence: 0, frameDataUrl: null });
       }
 
       const video = document.createElement('video');
@@ -158,6 +158,8 @@ class MediaScanner {
       video.src = objectUrl;
 
       let hasAnalyzed = false;
+      let capturedDataUrl = null;
+
       const cleanUp = (result) => {
         if (hasAnalyzed) return;
         hasAnalyzed = true;
@@ -167,10 +169,10 @@ class MediaScanner {
         resolve(result);
       };
 
-      // Fail-safe timeout: default to false (clean video) to prevent false positives
+      // 1.8 second fail-safe timeout per file to keep scanner lightning fast
       const timer = setTimeout(() => {
-        cleanUp({ hasHardsubs: false, confidence: 0.5 });
-      }, 3500);
+        cleanUp({ hasHardsubs: false, confidence: 0.5, frameDataUrl: capturedDataUrl });
+      }, 1800);
 
       video.onloadedmetadata = () => {
         const duration = video.duration || 1000;
@@ -189,9 +191,15 @@ class MediaScanner {
             const ctx = canvas.getContext('2d');
             ctx.drawImage(video, 0, 0, width, height);
 
-            // Subtitle zone: bottom 14% of video frame (83% to 97% height)
-            const subY = Math.floor(height * 0.83);
-            const subH = Math.floor(height * 0.14);
+            if (!capturedDataUrl) {
+              try {
+                capturedDataUrl = canvas.toDataURL('image/jpeg', 0.75);
+              } catch (e) {}
+            }
+
+            // Subtitle zone: bottom 16% of video frame (82% to 98% height)
+            const subY = Math.floor(height * 0.82);
+            const subH = Math.floor(height * 0.16);
             const imgData = ctx.getImageData(0, subY, width, subH);
             const pixels = imgData.data;
 
@@ -204,18 +212,15 @@ class MediaScanner {
               const g = pixels[i + 1];
               const b = pixels[i + 2];
 
-              // White or Yellow subtitle text color
-              const isWhiteText = r > 215 && g > 215 && b > 215;
-              const isYellowText = r > 210 && g > 200 && b < 120;
+              const isWhiteText = r > 210 && g > 210 && b > 210;
+              const isYellowText = r > 200 && g > 185 && b < 130;
 
               if (isWhiteText || isYellowText) {
                 textPixelCount++;
-
-                // Check adjacent pixels for dark outline/shadow (readability border)
                 const nextR = pixels[i + 4];
                 const nextG = pixels[i + 5];
                 const nextB = pixels[i + 6];
-                if (nextR < 50 && nextG < 50 && nextB < 50) {
+                if (nextR < 60 && nextG < 60 && nextB < 60) {
                   borderedTextCount++;
                 }
               }
@@ -224,9 +229,11 @@ class MediaScanner {
             const textRatio = textPixelCount / totalPixels;
             const borderRatio = borderedTextCount / totalPixels;
 
-            // Subtitle text lines require dense text pixels with dark outlines
-            if (textRatio > 0.003 && borderRatio > 0.0008) {
+            if (textRatio > 0.003 && borderRatio > 0.0007) {
               detectedFrameCount++;
+              try {
+                capturedDataUrl = canvas.toDataURL('image/jpeg', 0.80);
+              } catch (e) {}
             }
 
             sampleIndex++;
@@ -234,13 +241,12 @@ class MediaScanner {
               video.currentTime = sampleTimes[sampleIndex];
             } else {
               clearTimeout(timer);
-              // Require at least 2 out of 3 sampled frames to contain subtitle text!
-              const isHardsub = detectedFrameCount >= 2;
-              cleanUp({ hasHardsubs: isHardsub, confidence: isHardsub ? 0.95 : 0.85 });
+              const isHardsub = detectedFrameCount >= 1;
+              cleanUp({ hasHardsubs: isHardsub, confidence: isHardsub ? 0.95 : 0.80, frameDataUrl: capturedDataUrl });
             }
           } catch (err) {
             clearTimeout(timer);
-            cleanUp({ hasHardsubs: false, confidence: 0.5 });
+            cleanUp({ hasHardsubs: false, confidence: 0.5, frameDataUrl: capturedDataUrl });
           }
         };
 
@@ -250,7 +256,7 @@ class MediaScanner {
 
       video.onerror = () => {
         clearTimeout(timer);
-        cleanUp({ hasHardsubs: false, confidence: 0.5 });
+        cleanUp({ hasHardsubs: false, confidence: 0.5, frameDataUrl: null });
       };
     });
   }
@@ -297,8 +303,11 @@ class MediaScanner {
       const fullSoftTracks = allSubs.filter(s => !s.isForced && !/(forced|foreign|partial|narrative)/i.test(s.title || ''));
       const hasFullSoft = fullSoftTracks.length > 0;
 
+      // Attempt visual video frame analysis directly in browser
+      const visualRes = await this.analyzeVideoFrameSubtitles(file);
+
       // Determine 2-Category subtitle status automatically
-      const subStatus = (hasFullSoft || sidecarSubs.length > 0) ? 'has-subs' : 'no-subs';
+      const subStatus = (hasFullSoft || sidecarSubs.length > 0 || visualRes.hasHardsubs) ? 'has-subs' : 'no-subs';
 
       const mediaRecord = {
         id: `media_${Date.now()}_${i}`,
@@ -309,7 +318,9 @@ class MediaScanner {
         fileSizeFormatted: this.formatBytes(file.size),
         analysis: analysis,
         subStatus: subStatus,
-        sidecarSubs: sidecarSubs
+        sidecarSubs: sidecarSubs,
+        thumbnailDataUrl: visualRes.frameDataUrl,
+        hasHardsubs: visualRes.hasHardsubs
       };
 
       results.push(mediaRecord);
