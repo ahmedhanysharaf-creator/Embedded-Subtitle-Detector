@@ -2,7 +2,7 @@
  * Folder Scanner & Batch Queue Manager
  * Traverses file trees (Drag & Drop, WebKitDirectory, File System Access API)
  * Detects video files, sidecar subtitle files (.srt, .vtt, .ass), and correlates them.
- * Includes Automatic Offscreen Video Frame Subtitle Text Analysis Engine!
+ * Includes Multi-Frame Automatic Video Subtitle Analysis Engine (High Precision).
  */
 class MediaScanner {
   constructor() {
@@ -140,8 +140,8 @@ class MediaScanner {
   }
 
   /**
-   * Automatic Client-Side Frame Subtitle Analysis Engine
-   * Samples offscreen video frames at 20% timestamp and measures pixel luminance & edge contrast in lower 20% region
+   * High-Precision Multi-Frame Video Subtitle Analysis Engine
+   * Samples 3 video timestamps (25%, 50%, 75%) and analyzes text brightness & dark outline density in subtitle region
    */
   async analyzeVideoFrameSubtitles(file) {
     return new Promise((resolve) => {
@@ -152,7 +152,7 @@ class MediaScanner {
       const video = document.createElement('video');
       video.muted = true;
       video.playsInline = true;
-      video.preload = 'metadata';
+      video.preload = 'auto';
 
       const objectUrl = URL.createObjectURL(file);
       video.src = objectUrl;
@@ -167,72 +167,96 @@ class MediaScanner {
         resolve(result);
       };
 
-      // Timeout fallback if video codec fails to load in browser
+      // Fail-safe timeout: default to false (clean video) to prevent false positives
       const timer = setTimeout(() => {
-        cleanUp({ hasHardsubs: true, confidence: 0.7 });
-      }, 1200);
+        cleanUp({ hasHardsubs: false, confidence: 0.5 });
+      }, 3500);
 
       video.onloadedmetadata = () => {
-        const targetTime = video.duration ? video.duration * 0.20 : 300;
-        video.currentTime = targetTime;
-      };
+        const duration = video.duration || 1000;
+        const sampleTimes = [duration * 0.25, duration * 0.50, duration * 0.75];
+        let sampleIndex = 0;
+        let detectedFrameCount = 0;
 
-      video.onseeked = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          const width = video.videoWidth || 640;
-          const height = video.videoHeight || 360;
-          canvas.width = width;
-          canvas.height = height;
+        const analyzeCurrentFrame = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            const width = video.videoWidth || 640;
+            const height = video.videoHeight || 360;
+            canvas.width = width;
+            canvas.height = height;
 
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(video, 0, 0, width, height);
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, width, height);
 
-          // Analyze bottom 22% region (subtitle placement zone)
-          const subY = Math.floor(height * 0.78);
-          const subH = Math.floor(height * 0.20);
-          const imgData = ctx.getImageData(0, subY, width, subH);
-          const pixels = imgData.data;
+            // Subtitle zone: bottom 14% of video frame (83% to 97% height)
+            const subY = Math.floor(height * 0.83);
+            const subH = Math.floor(height * 0.14);
+            const imgData = ctx.getImageData(0, subY, width, subH);
+            const pixels = imgData.data;
 
-          let brightPixels = 0;
-          let edgeContrast = 0;
-          const totalPixels = width * subH;
+            let textPixelCount = 0;
+            let borderedTextCount = 0;
+            const totalPixels = width * subH;
 
-          for (let i = 0; i < pixels.length; i += 4) {
-            const r = pixels[i];
-            const g = pixels[i + 1];
-            const b = pixels[i + 2];
-            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            for (let i = 0; i < pixels.length - 8; i += 4) {
+              const r = pixels[i];
+              const g = pixels[i + 1];
+              const b = pixels[i + 2];
 
-            if (lum > 200) brightPixels++;
+              // White or Yellow subtitle text color
+              const isWhiteText = r > 215 && g > 215 && b > 215;
+              const isYellowText = r > 210 && g > 200 && b < 120;
 
-            if (i > 4) {
-              const prevLum = 0.299 * pixels[i - 4] + 0.587 * pixels[i - 3] + 0.114 * pixels[i - 2];
-              if (Math.abs(lum - prevLum) > 70) edgeContrast++;
+              if (isWhiteText || isYellowText) {
+                textPixelCount++;
+
+                // Check adjacent pixels for dark outline/shadow (readability border)
+                const nextR = pixels[i + 4];
+                const nextG = pixels[i + 5];
+                const nextB = pixels[i + 6];
+                if (nextR < 50 && nextG < 50 && nextB < 50) {
+                  borderedTextCount++;
+                }
+              }
             }
+
+            const textRatio = textPixelCount / totalPixels;
+            const borderRatio = borderedTextCount / totalPixels;
+
+            // Subtitle text lines require dense text pixels with dark outlines
+            if (textRatio > 0.003 && borderRatio > 0.0008) {
+              detectedFrameCount++;
+            }
+
+            sampleIndex++;
+            if (sampleIndex < sampleTimes.length) {
+              video.currentTime = sampleTimes[sampleIndex];
+            } else {
+              clearTimeout(timer);
+              // Require at least 2 out of 3 sampled frames to contain subtitle text!
+              const isHardsub = detectedFrameCount >= 2;
+              cleanUp({ hasHardsubs: isHardsub, confidence: isHardsub ? 0.95 : 0.85 });
+            }
+          } catch (err) {
+            clearTimeout(timer);
+            cleanUp({ hasHardsubs: false, confidence: 0.5 });
           }
+        };
 
-          const brightRatio = brightPixels / totalPixels;
-          const edgeRatio = edgeContrast / totalPixels;
-
-          clearTimeout(timer);
-          const isHardsub = brightRatio > 0.002 || edgeRatio > 0.004;
-          cleanUp({ hasHardsubs: isHardsub, confidence: isHardsub ? 0.95 : 0.8 });
-        } catch (err) {
-          clearTimeout(timer);
-          cleanUp({ hasHardsubs: true, confidence: 0.7 });
-        }
+        video.onseeked = analyzeCurrentFrame;
+        video.currentTime = sampleTimes[0];
       };
 
       video.onerror = () => {
         clearTimeout(timer);
-        cleanUp({ hasHardsubs: true, confidence: 0.7 });
+        cleanUp({ hasHardsubs: false, confidence: 0.5 });
       };
     });
   }
 
   /**
-   * Execute batch scan with live progress updates & automatic frame analysis
+   * Execute batch scan with live progress updates & high-precision multi-frame analysis
    */
   async scanBatch(scanData, onProgress, onFileComplete) {
     const videoFiles = scanData.videoFiles || (Array.isArray(scanData) ? scanData : []);
@@ -277,7 +301,7 @@ class MediaScanner {
       } else if (sidecarSubs.length > 0) {
         subStatus = 'sidecar-subs';
       } else {
-        // Run Automatic Offscreen Video Frame Subtitle Analysis Engine
+        // Run High-Precision Multi-Frame Video Subtitle Analysis Engine
         const frameAnalysis = await this.analyzeVideoFrameSubtitles(file);
         if (frameAnalysis.hasHardsubs) {
           subStatus = 'hard-subs';
