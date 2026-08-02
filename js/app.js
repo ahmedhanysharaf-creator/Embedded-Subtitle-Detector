@@ -276,8 +276,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const subs = record.analysis ? record.analysis.subtitles : [];
 
       let statusBadge = hasSubs
-        ? `<div class="sub-status-badge sub-badge-has"><i class="fa-solid fa-closed-captioning"></i> ${subs.length} Embedded Subtitle${subs.length > 1 ? 's' : ''}</div>`
-        : `<div class="sub-status-badge sub-badge-none"><i class="fa-solid fa-circle-xmark"></i> No Embedded Subtitles</div>`;
+        ? `<div class="sub-status-badge sub-badge-has"><i class="fa-solid fa-closed-captioning"></i> ${subs.length} Soft Subtitle Track${subs.length > 1 ? 's' : ''}</div>`
+        : `<div class="sub-status-badge sub-badge-none"><i class="fa-solid fa-film text-warning"></i> 0 Soft Tracks &bull; Hardcoded (Burned-in) Subtitles</div>`;
 
       // Languages & Formats Chips
       let trackChipsHtml = '';
@@ -385,9 +385,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Subtitle Tracks List
     if (subs.length === 0) {
       modalSubtitleTracksList.innerHTML = `
-        <div class="empty-state" style="padding: 2rem 1rem;">
-          <i class="fa-solid fa-closed-captioning-slash text-danger" style="font-size: 2rem;"></i>
-          <p style="margin-top: 0.5rem; color: var(--text-secondary);">No embedded subtitle streams detected in this video container.</p>
+        <div class="hardsub-notice-card">
+          <div class="notice-icon"><i class="fa-solid fa-film text-warning"></i></div>
+          <div class="notice-content">
+            <h4>0 Separate Soft Subtitle Tracks Found</h4>
+            <p>Because these movies were downloaded directly with built-in Arabic subtitles from sites like Flixbaba / EgyBest, the subtitles are <strong>Hardcoded (Burned-in / Hardsubs)</strong> rendered directly into the video picture itself.</p>
+            <div class="notice-bullets">
+              <span>&bull; <strong>Softsubs (0 tracks):</strong> Separate toggleable text streams in container (e.g. VLC menu).</span>
+              <span>&bull; <strong>Hardsubs (Active):</strong> Subtitles merged permanently into the video frames.</span>
+            </div>
+          </div>
         </div>
       `;
     } else {
