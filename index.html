@@ -49,10 +49,10 @@
     <section class="tech-insight-banner" id="techInsightBanner">
       <div class="banner-content">
         <div class="banner-badge">
-          <i class="fa-solid fa-lightbulb"></i> Softsubs vs. Hardsubs
+          <i class="fa-solid fa-bolt"></i> Hardcoded Subtitle Engine
         </div>
         <div class="banner-text">
-          <p><strong>Soft Subtitle Tracks (Softsubs)</strong> are separate toggleable text streams stored in `.mp4`/`.mkv` headers. Movies downloaded from Arabic streaming sites (EgyBest, Flixbaba, Akwam) typically use <strong>Hardcoded Subtitles (Hardsubs)</strong> burned directly into the video image itself, which have 0 soft tracks.</p>
+          <p><strong>Burned-in Subtitles (Hardsubs)</strong> are baked directly into the video image frames and contain 0 header text tracks. Use our local <strong>Python + FFmpeg Hardsub Scanner</strong> (<code style="background: rgba(0,0,0,0.4); padding: 2px 6px; border-radius: 4px; color: var(--accent);">run_scanner.bat</code>) in your project directory to visually scan all <code>.mkv</code> & <code>.mp4</code> movies and automatically move subtitled movies into <code>Subtitled_Movies\</code>.</p>
         </div>
       </div>
       <button class="banner-close-btn" id="closeBannerBtn" aria-label="Close insight banner">&times;</button>
