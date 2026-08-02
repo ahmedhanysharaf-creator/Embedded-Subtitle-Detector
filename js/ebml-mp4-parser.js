@@ -4,60 +4,32 @@
  */
 
 const LANG_MAP = {
-  'ara': 'Arabic (العربية)',
-  'ar': 'Arabic (العربية)',
-  'arb': 'Arabic (العربية)',
-  'eng': 'English',
-  'en': 'English',
-  'fre': 'French',
-  'fra': 'French',
-  'fr': 'French',
-  'spa': 'Spanish',
-  'es': 'Spanish',
-  'ger': 'German',
-  'deu': 'German',
-  'de': 'German',
-  'ita': 'Italian',
-  'it': 'Italian',
-  'rus': 'Russian',
-  'ru': 'Russian',
-  'zho': 'Chinese',
-  'chi': 'Chinese',
-  'zh': 'Chinese',
-  'jpn': 'Japanese',
-  'ja': 'Japanese',
-  'kor': 'Korean',
-  'ko': 'Korean',
-  'por': 'Portuguese',
-  'pt': 'Portuguese',
-  'tur': 'Turkish',
-  'tr': 'Turkish',
-  'dut': 'Dutch',
-  'nld': 'Dutch',
-  'nl': 'Dutch',
-  'swe': 'Swedish',
-  'sv': 'Swedish',
-  'nor': 'Norwegian',
-  'no': 'Norwegian',
-  'dan': 'Danish',
-  'da': 'Danish',
-  'fin': 'Finnish',
-  'fi': 'Finnish',
-  'pol': 'Polish',
-  'pl': 'Polish',
-  'gre': 'Greek',
-  'ell': 'Greek',
-  'el': 'Greek',
-  'heb': 'Hebrew',
-  'he': 'Hebrew',
-  'hin': 'Hindi',
-  'hi': 'Hindi',
-  'ind': 'Indonesian',
-  'id': 'Indonesian',
-  'tha': 'Thai',
-  'th': 'Thai',
-  'vie': 'Vietnamese',
-  'vi': 'Vietnamese',
+  'ara': 'Arabic (العربية)', 'ar': 'Arabic (العربية)', 'arb': 'Arabic (العربية)',
+  'eng': 'English', 'en': 'English',
+  'fre': 'French', 'fra': 'French', 'fr': 'French',
+  'spa': 'Spanish', 'es': 'Spanish',
+  'ger': 'German', 'deu': 'German', 'de': 'German',
+  'ita': 'Italian', 'it': 'Italian',
+  'rus': 'Russian', 'ru': 'Russian',
+  'zho': 'Chinese', 'chi': 'Chinese', 'zh': 'Chinese',
+  'jpn': 'Japanese', 'ja': 'Japanese',
+  'kor': 'Korean', 'ko': 'Korean',
+  'por': 'Portuguese', 'pt': 'Portuguese',
+  'tur': 'Turkish', 'tr': 'Turkish',
+  'dut': 'Dutch', 'nld': 'Dutch', 'nl': 'Dutch',
+  'swe': 'Swedish', 'sv': 'Swedish',
+  'nor': 'Norwegian', 'no': 'Norwegian',
+  'dan': 'Danish', 'da': 'Danish',
+  'fin': 'Finnish', 'fi': 'Finnish',
+  'pol': 'Polish', 'pl': 'Polish',
+  'gre': 'Greek', 'ell': 'Greek', 'el': 'Greek',
+  'heb': 'Hebrew', 'he': 'Hebrew',
+  'hin': 'Hindi', 'hi': 'Hindi',
+  'ind': 'Indonesian', 'id': 'Indonesian',
+  'tha': 'Thai', 'th': 'Thai',
+  'vie': 'Vietnamese', 'vi': 'Vietnamese',
+  'cze': 'Czech', 'ces': 'Czech', 'cs': 'Czech',
+  'ron': 'Romanian', 'rum': 'Romanian', 'ro': 'Romanian',
   'und': 'Undefined'
 };
 
@@ -308,10 +280,10 @@ class FastHeaderParser {
   }
 
   // ==========================================
-  // MKV / EBML PARSER
+  // MKV / EBML PARSER (ACCURATE TRACKS LOCATOR)
   // ==========================================
   static async parseMKV(file) {
-    const dataView = await this.readFileSlice(file, 0, 1024 * 1024);
+    const dataView = await this.readFileSlice(file, 0, 5 * 1024 * 1024); // 5 MB header slice
     const buf = new Uint8Array(dataView.buffer);
     
     if (buf[0] !== 0x1A || buf[1] !== 0x45 || buf[2] !== 0xDF || buf[3] !== 0xA3) {
@@ -356,11 +328,19 @@ class FastHeaderParser {
       return { id: id >>> 0, length };
     };
 
+    // Locate true Tracks element (0x1654AE6B) whose first child is TrackEntry (0xAE)
     let tracksPos = -1;
-    for (let i = 0; i < buf.length - 4; i++) {
+    for (let i = 0; i < buf.length - 10; i++) {
       if (buf[i] === 0x16 && buf[i+1] === 0x54 && buf[i+2] === 0xAE && buf[i+3] === 0x6B) {
-        tracksPos = i;
-        break;
+        const elId = readElementId(i);
+        const elSz = readVint(i + elId.length);
+        if (elSz) {
+          const childPos = i + elId.length + elSz.length;
+          if (childPos < buf.length && buf[childPos] === 0xAE) {
+            tracksPos = i;
+            break;
+          }
+        }
       }
     }
 
@@ -380,7 +360,7 @@ class FastHeaderParser {
           const entryStart = cursor + el.length + sz.length;
           const entryEnd = Math.min(entryStart + sz.value, tracksEnd);
 
-          if (el.id === 0xAE) {
+          if (el.id === 0xAE) { // TrackEntry
             let trackType = 0;
             let codecId = 'Unknown';
             let language = 'und';
