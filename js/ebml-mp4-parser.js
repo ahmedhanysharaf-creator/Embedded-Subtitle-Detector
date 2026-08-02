@@ -127,15 +127,20 @@ class FastHeaderParser {
 
     const readBoxHeader = (pos) => {
       if (pos + 8 > len) return null;
-      const size = (buf[pos] << 24) | (buf[pos+1] << 16) | (buf[pos+2] << 8) | buf[pos+3];
+      const size = (buf[pos] * 16777216) + (buf[pos+1] << 16) + (buf[pos+2] << 8) + buf[pos+3];
       const type = String.fromCharCode(buf[pos+4], buf[pos+5], buf[pos+6], buf[pos+7]);
-      return { size: size >>> 0, type };
+      return { size: size, type };
     };
 
     let cursor = 8;
     while (cursor < len - 8) {
       const box = readBoxHeader(cursor);
-      if (!box || box.size < 8 || cursor + box.size > len) break;
+      if (!box || box.size < 8 || cursor + box.size > len) {
+        // If box size extends past buffer or invalid, advance cursor by 4 or break
+        if (!box || box.size < 8) break;
+        cursor += 4;
+        continue;
+      }
 
       if (box.type === 'trak') {
         const trakBuf = buf.subarray(cursor, cursor + box.size);
@@ -228,22 +233,22 @@ class FastHeaderParser {
    * Fast locator for MP4 'moov' atom across header, tail, and top-level box scan
    */
   static async findMP4MoovBuffer(file) {
-    const headView = await this.readFileSlice(file, 0, 512 * 1024);
+    const headView = await this.readFileSlice(file, 0, 2 * 1024 * 1024); // 2 MB head slice
     const headBuf = new Uint8Array(headView.buffer);
     let moovIdx = this.indexOfBytes(headBuf, [109, 111, 111, 118]);
 
     if (moovIdx !== -1 && moovIdx >= 4) {
       const boxStart = moovIdx - 4;
-      const boxSize = ((headBuf[boxStart] << 24) | (headBuf[boxStart+1] << 16) | (headBuf[boxStart+2] << 8) | headBuf[boxStart+3]) >>> 0;
+      const boxSize = (headBuf[boxStart] * 16777216) + (headBuf[boxStart+1] << 16) + (headBuf[boxStart+2] << 8) + headBuf[boxStart+3];
       if (boxSize >= 8 && boxStart + boxSize <= headBuf.length) {
         return headBuf.subarray(boxStart, boxStart + boxSize);
       } else if (boxSize >= 8) {
-        const fullSlice = await this.readFileSlice(file, boxStart, Math.min(boxSize, 15 * 1024 * 1024));
+        const fullSlice = await this.readFileSlice(file, boxStart, Math.min(boxSize, 20 * 1024 * 1024));
         return new Uint8Array(fullSlice.buffer);
       }
     }
 
-    const tailLength = Math.min(file.size, 2 * 1024 * 1024);
+    const tailLength = Math.min(file.size, 10 * 1024 * 1024); // 10 MB tail slice
     const tailStart = file.size - tailLength;
     const tailView = await this.readFileSlice(file, tailStart, tailLength);
     const tailBuf = new Uint8Array(tailView.buffer);
@@ -251,33 +256,40 @@ class FastHeaderParser {
 
     if (moovIdx !== -1 && moovIdx >= 4) {
       const boxStart = moovIdx - 4;
-      const boxSize = ((tailBuf[boxStart] << 24) | (tailBuf[boxStart+1] << 16) | (tailBuf[boxStart+2] << 8) | tailBuf[boxStart+3]) >>> 0;
+      const boxSize = (tailBuf[boxStart] * 16777216) + (tailBuf[boxStart+1] << 16) + (tailBuf[boxStart+2] << 8) + tailBuf[boxStart+3];
       if (boxSize >= 8 && boxStart + boxSize <= tailBuf.length) {
         return tailBuf.subarray(boxStart, boxStart + boxSize);
       } else if (boxSize >= 8) {
         const absBoxStart = tailStart + boxStart;
-        const fullSlice = await this.readFileSlice(file, absBoxStart, Math.min(boxSize, 15 * 1024 * 1024));
+        const fullSlice = await this.readFileSlice(file, absBoxStart, Math.min(boxSize, 20 * 1024 * 1024));
         return new Uint8Array(fullSlice.buffer);
       }
     }
 
     let pos = 0;
     let attempts = 0;
-    while (pos < file.size - 8 && attempts < 30) {
+    while (pos < file.size - 8 && attempts < 50) {
       attempts++;
       const hdrView = await this.readFileSlice(file, pos, 16);
       if (hdrView.byteLength < 8) break;
       const hdrBuf = new Uint8Array(hdrView.buffer);
-      let size = ((hdrBuf[0] << 24) | (hdrBuf[1] << 16) | (hdrBuf[2] << 8) | hdrBuf[3]) >>> 0;
+      let size = (hdrBuf[0] * 16777216) + (hdrBuf[1] << 16) + (hdrBuf[2] << 8) + hdrBuf[3];
       const type = String.fromCharCode(hdrBuf[4], hdrBuf[5], hdrBuf[6], hdrBuf[7]);
 
       if (size === 1 && hdrBuf.length >= 16) {
-        const high = (hdrBuf[8] << 24) | (hdrBuf[9] << 16) | (hdrBuf[10] << 8) | hdrBuf[11];
-        const low = (hdrBuf[12] << 24) | (hdrBuf[13] << 16) | (hdrBuf[14] << 8) | hdrBuf[15];
-        size = (high * 4294967296) + (low >>> 0);
+        const high = (hdrBuf[8] * 16777216) + (hdrBuf[9] << 16) + (hdrBuf[10] << 8) + hdrBuf[11];
+        const low = (hdrBuf[12] * 16777216) + (hdrBuf[13] << 16) + (hdrBuf[14] << 8) + hdrBuf[15];
+        size = (high * 4294967296) + low;
       }
 
       if (type === 'moov') {
+        const moovSlice = await this.readFileSlice(file, pos, Math.min(size, 20 * 1024 * 1024));
+        return new Uint8Array(moovSlice.buffer);
+      }
+
+      if (size <= 0) break;
+      pos += size;
+    }
         const moovSlice = await this.readFileSlice(file, pos, Math.min(size, 15 * 1024 * 1024));
         return new Uint8Array(moovSlice.buffer);
       }
