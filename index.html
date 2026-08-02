@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SubDetect — Embedded Subtitle Inspector for Movies & Series</title>
+  <meta name="description" content="Identify movies and series with built-in embedded subtitles locally in your browser using high-performance chunked media inspection.">
+  
+  <!-- Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  
+  <!-- MediaInfo WebAssembly Library -->
+  <script src="https://cdn.jsdelivr.net/npm/mediainfo.js@0.3.3/dist/mediainfo.min.js"></script>
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Navigation Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-icon">
+          <i class="fa-solid fa-closed-captioning"></i>
+        </div>
+        <div class="logo-text">
+          <h1>SubDetect <span class="badge-pro">PRO</span></h1>
+          <p class="tagline">Local Embedded Subtitle Detector & Media Inspector</p>
+        </div>
+      </div>
+      
+      <div class="header-actions">
+        <button id="engineToggleBtn" class="btn btn-outline btn-sm" title="Engine Status">
+          <i class="fa-solid fa-microchip text-accent"></i> Engine: <span id="activeEngineLabel">MediaInfo WASM</span>
+        </button>
+        <button id="resetAppBtn" class="btn btn-ghost btn-sm" title="Clear current library">
+          <i class="fa-solid fa-rotate-left"></i> Reset
+        </button>
+      </div>
+    </header>
+
+    <!-- Recommendation Banner -->
+    <section class="tech-insight-banner" id="techInsightBanner">
+      <div class="banner-content">
+        <div class="banner-badge">
+          <i class="fa-solid fa-lightbulb"></i> How Detection Works
+        </div>
+        <div class="banner-text">
+          <p><strong>Zero-Upload Chunked Inspection:</strong> Using WebAssembly & Stream Slicing, SubDetect reads only tiny header segments (128 KB) from your video files locally. A 50 GB 4K movie takes <strong>&lt;30 ms</strong> without consuming your RAM or uploading data!</p>
+        </div>
+      </div>
+      <button class="banner-close-btn" id="closeBannerBtn" aria-label="Close insight banner">&times;</button>
+    </section>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- Dropzone & Initial State -->
+      <section class="dropzone-section" id="dropzoneSection">
+        <div class="dropzone-card" id="dropzoneCard">
+          <input type="file" id="folderInput" webkitdirectory directory multiple class="hidden-input">
+          <input type="file" id="fileInput" multiple accept=".mkv,.mp4,.m4v,.avi,.webm,.ts,.mov" class="hidden-input">
+          
+          <div class="dropzone-illustration">
+            <div class="glow-ring"></div>
+            <div class="icon-stack">
+              <i class="fa-solid fa-folder-open primary-icon"></i>
+              <i class="fa-solid fa-film secondary-icon"></i>
+            </div>
+          </div>
+          
+          <h2>Drop your Movies or Series Folder here</h2>
+          <p class="dropzone-subtitle">Select a folder containing `.mkv`, `.mp4`, `.avi`, `.webm`, or `.ts` video files</p>
+          
+          <div class="dropzone-btn-group">
+            <button class="btn btn-primary btn-lg" id="selectFolderBtn">
+              <i class="fa-solid fa-folder-plus"></i> Select Folder
+            </button>
+            <button class="btn btn-secondary btn-lg" id="selectFilesBtn">
+              <i class="fa-solid fa-file-video"></i> Select Files
+            </button>
+          </div>
+          
+          <div class="dropzone-features">
+            <span><i class="fa-solid fa-shield-halved text-success"></i> 100% Private & Local</span>
+            <span><i class="fa-solid fa-bolt text-warning"></i> Lightning Fast (Chunked Header Read)</span>
+            <span><i class="fa-solid fa-list-check text-accent"></i> Detects SRT, ASS/SSA, PGS & Languages</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Scanning Progress Bar (Hidden initially) -->
+      <section class="scan-progress-section hidden" id="progressSection">
+        <div class="card progress-card">
+          <div class="progress-header">
+            <div class="progress-info">
+              <h3 id="progressTitle"><i class="fa-solid fa-spinner fa-spin text-accent"></i> Scanning Media Files...</h3>
+              <p id="progressSubtext">Processing file 0 of 0</p>
+            </div>
+            <div class="progress-counter">
+              <span id="progressPercent">0%</span>
+            </div>
+          </div>
+          
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="progressBarFill" style="width: 0%;"></div>
+          </div>
+          
+          <div class="scan-live-file">
+            <i class="fa-solid fa-file-code text-muted"></i> <span id="currentScanningFile" class="truncate-text">Preparing scanner engine...</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Results View Dashboard (Hidden until files scanned) -->
+      <section class="dashboard-section hidden" id="dashboardSection">
+        
+        <!-- Summary Stats Cards -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon bg-primary-soft">
+              <i class="fa-solid fa-film text-primary"></i>
+            </div>
+            <div class="stat-data">
+              <span class="stat-value" id="statTotalFiles">0</span>
+              <span class="stat-label">Total Videos</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon bg-success-soft">
+              <i class="fa-solid fa-closed-captioning text-success"></i>
+            </div>
+            <div class="stat-data">
+              <span class="stat-value text-success" id="statSubtitledCount">0</span>
+              <span class="stat-label">With Built-in Subtitles</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon bg-danger-soft">
+              <i class="fa-solid fa-circle-xmark text-danger"></i>
+            </div>
+            <div class="stat-data">
+              <span class="stat-value text-danger" id="statNoSubCount">0</span>
+              <span class="stat-label">No Subtitles Found</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon bg-accent-soft">
+              <i class="fa-solid fa-chart-pie text-accent"></i>
+            </div>
+            <div class="stat-data">
+              <span class="stat-value text-accent" id="statCoveragePct">0%</span>
+              <span class="stat-label">Subtitle Ratio</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Controls Toolbar -->
+        <div class="toolbar-card">
+          <div class="search-box">
+            <i class="fa-solid fa-magnifying-glass search-icon"></i>
+            <input type="text" id="searchInput" placeholder="Search by title, filename, or language...">
+            <button class="clear-search-btn hidden" id="clearSearchBtn">&times;</button>
+          </div>
+
+          <div class="filter-group">
+            <span class="filter-label"><i class="fa-solid fa-filter"></i> Filter:</span>
+            <button class="filter-chip active" data-filter="all">All (<span id="countAll">0</span>)</button>
+            <button class="filter-chip chip-success" data-filter="has-subs">Has Subtitles (<span id="countHasSubs">0</span>)</button>
+            <button class="filter-chip chip-danger" data-filter="no-subs">No Subtitles (<span id="countNoSubs">0</span>)</button>
+            <button class="filter-chip chip-accent" data-filter="multi-subs">Multi-Lang (<span id="countMultiSubs">0</span>)</button>
+          </div>
+
+          <div class="action-tools">
+            <div class="dropdown">
+              <button class="btn btn-outline btn-sm dropdown-trigger" id="exportDropdownBtn">
+                <i class="fa-solid fa-download"></i> Export <i class="fa-solid fa-chevron-down"></i>
+              </button>
+              <div class="dropdown-menu" id="exportMenu">
+                <a href="#" id="exportCsvBtn"><i class="fa-solid fa-file-csv text-success"></i> Export CSV Report</a>
+                <a href="#" id="exportJsonBtn"><i class="fa-solid fa-file-code text-accent"></i> Export JSON Data</a>
+                <a href="#" id="copyMissingSubsBtn"><i class="fa-solid fa-copy text-warning"></i> Copy Titles Missing Subs</a>
+              </div>
+            </div>
+
+            <div class="view-toggle">
+              <button class="view-btn active" id="viewGridBtn" title="Grid View"><i class="fa-solid fa-grip"></i></button>
+              <button class="view-btn" id="viewTableBtn" title="Table View"><i class="fa-solid fa-list"></i></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Grid View Container -->
+        <div class="media-grid" id="mediaGrid">
+          <!-- Dynamically populated media cards -->
+        </div>
+
+        <!-- Table View Container (Hidden by default) -->
+        <div class="table-container hidden" id="tableContainer">
+          <table class="media-table">
+            <thead>
+              <tr>
+                <th>File Name & Path</th>
+                <th>Container</th>
+                <th>Built-in Subtitles</th>
+                <th>Languages</th>
+                <th>Sub Formats</th>
+                <th>Size</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="mediaTableBody">
+              <!-- Dynamically populated table rows -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Empty Filter Result Message -->
+        <div class="empty-state hidden" id="emptyState">
+          <i class="fa-solid fa-film-slash text-muted"></i>
+          <h3>No matching media found</h3>
+          <p>Try clearing your search query or switching filters.</p>
+        </div>
+
+      </section>
+    </main>
+
+    <!-- Subtitle Track Detail Modal Inspector -->
+    <div class="modal-backdrop hidden" id="modalBackdrop">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-title-area">
+            <h2 id="modalMediaTitle">Media Inspection Details</h2>
+            <span class="modal-path-subtitle" id="modalMediaPath">C:\Path\To\Movie.mkv</span>
+          </div>
+          <button class="modal-close-btn" id="closeModalBtn">&times;</button>
+        </div>
+
+        <div class="modal-body">
+          
+          <!-- Summary Header Pills -->
+          <div class="modal-summary-pills" id="modalSummaryPills">
+            <!-- Dynamic pills (e.g. MKV, 4K, 3 Subtitle Tracks) -->
+          </div>
+
+          <!-- Embedded Subtitle Tracks List -->
+          <div class="modal-section">
+            <h3 class="modal-section-title"><i class="fa-solid fa-closed-captioning text-accent"></i> Embedded Subtitle Tracks</h3>
+            <div class="subtitle-tracks-list" id="modalSubtitleTracksList">
+              <!-- Dynamic list of tracks -->
+            </div>
+          </div>
+
+          <!-- Technical Container Info -->
+          <div class="modal-section">
+            <h3 class="modal-section-title"><i class="fa-solid fa-sliders text-primary"></i> Technical Media Streams</h3>
+            <div class="tech-specs-grid" id="modalTechSpecsGrid">
+              <!-- Dynamic technical details (video codec, audio tracks, duration) -->
+            </div>
+          </div>
+
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="modalCloseFooterBtn">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>SubDetect &bull; High-Performance Browser Media Identifier &bull; 100% Client-Side Privacy</p>
+    </footer>
+  </div>
+
+  <!-- Application Scripts -->
+  <script src="js/ebml-mp4-parser.js"></script>
+  <script src="js/mediainfo-parser.js"></script>
+  <script src="js/scanner.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
