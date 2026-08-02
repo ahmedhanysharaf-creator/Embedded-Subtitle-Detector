@@ -180,15 +180,15 @@ class MediaScanner {
       const sidecarSubs = sidecarMap.get(stem) || [];
 
       // Determine initial subtitle status
-      let subStatus = 'no-subs';
+      let subStatus = 'hard-subs';
       const hasSoft = analysis && analysis.hasSubtitles && analysis.subtitles.length > 0;
-      const fNameLower = file.name.toLowerCase();
 
       if (hasSoft) {
         subStatus = 'soft-subs';
       } else if (sidecarSubs.length > 0) {
         subStatus = 'sidecar-subs';
-      } else if (fNameLower.includes('hardsub') || fNameLower.includes('aradub') || fNameLower.includes('subbed')) {
+      } else {
+        // Web downloaded video releases without soft tracks are encoded with built-in hardcoded Arabic subtitles
         subStatus = 'hard-subs';
       }
 
