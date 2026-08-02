@@ -16,22 +16,35 @@ class MediaInfoEngine {
     if (this.mediainfoInstance) return this.mediainfoInstance;
     if (this.initPromise) return this.initPromise;
 
-    this.initPromise = new Promise((resolve) => {
-      const factory = window.MediaInfoFactory || window.MediaInfo;
+    this.initPromise = new Promise(async (resolve) => {
+      const factory = window.MediaInfoFactory || window.MediaInfo || window.mediainfo;
       if (typeof factory !== 'function') {
         console.warn('MediaInfo library script not loaded on window object');
         resolve(null);
         return;
       }
 
-      factory({ format: 'object' }, (mediainfo) => {
-        this.mediainfoInstance = mediainfo;
-        console.log('✅ MediaInfo WASM engine initialized successfully');
-        resolve(mediainfo);
-      }, (err) => {
+      try {
+        const opts = {
+          format: 'object',
+          locateFile: () => 'https://cdn.jsdelivr.net/npm/mediainfo.js@0.3.3/dist/umd/MediaInfoModule.wasm'
+        };
+        const res = factory(opts, (mediainfo) => {
+          this.mediainfoInstance = mediainfo;
+          console.log('✅ MediaInfo WASM engine initialized via callback');
+          resolve(mediainfo);
+        });
+
+        if (res && typeof res.then === 'function') {
+          const mediainfo = await res;
+          this.mediainfoInstance = mediainfo;
+          console.log('✅ MediaInfo WASM engine initialized via Promise');
+          resolve(mediainfo);
+        }
+      } catch (err) {
         console.warn('⚠️ MediaInfo WASM init error:', err);
         resolve(null);
-      });
+      }
     });
 
     return this.initPromise;
