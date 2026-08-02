@@ -1,6 +1,6 @@
 /**
  * SubDetect Main Application Controller & UI Store
- * Honest Embedded Subtitle Inspector & Optional User Hardsub Tagging
+ * Triple-Detection System (Embedded Softsubs + Sidecar SRT Files + Hardcoded Subtitles)
  */
 document.addEventListener('DOMContentLoaded', () => {
   // DOM Elements
@@ -23,8 +23,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const dashboardSection = document.getElementById('dashboardSection');
   const statTotalFiles = document.getElementById('statTotalFiles');
   const statSubtitledCount = document.getElementById('statSubtitledCount');
-  const statNoSubCount = document.getElementById('statNoSubCount');
-  const statCoveragePct = document.getElementById('statCoveragePct');
+  const statSoftsubCount = document.getElementById('statSoftsubCount');
+  const statSidecarCount = document.getElementById('statSidecarCount');
+  const statHardsubCount = document.getElementById('statHardsubCount');
 
   // Toolbar & Filters
   const searchInput = document.getElementById('searchInput');
@@ -32,8 +33,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const filterChips = document.querySelectorAll('.filter-chip');
   const countAll = document.getElementById('countAll');
   const countHasSubs = document.getElementById('countHasSubs');
-  const countNoSubs = document.getElementById('countNoSubs');
+  const countSoftSubs = document.getElementById('countSoftSubs');
+  const countSidecarSubs = document.getElementById('countSidecarSubs');
   const countHardSubs = document.getElementById('countHardSubs');
+  const countNoSubs = document.getElementById('countNoSubs');
 
   // Export & View Toggle
   const exportDropdownBtn = document.getElementById('exportDropdownBtn');
@@ -80,9 +83,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- EVENT LISTENERS FOR SELECTION & DRAG DROP ---
   selectFolderBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const files = await window.mediaScanner.pickDirectory();
-    if (files && files.length > 0) {
-      startScanning(files);
+    const scanData = await window.mediaScanner.pickDirectory();
+    if (scanData && (scanData.videoFiles.length > 0 || scanData.subtitleFiles.length > 0)) {
+      startScanning(scanData);
     } else {
       folderInput.click();
     }
@@ -94,13 +97,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   folderInput.addEventListener('change', (e) => {
-    const files = window.mediaScanner.processFileList(e.target.files);
-    if (files.length > 0) startScanning(files);
+    const scanData = window.mediaScanner.processFileList(e.target.files);
+    if (scanData.videoFiles.length > 0) startScanning(scanData);
   });
 
   fileInput.addEventListener('change', (e) => {
-    const files = window.mediaScanner.processFileList(e.target.files);
-    if (files.length > 0) startScanning(files);
+    const scanData = window.mediaScanner.processFileList(e.target.files);
+    if (scanData.videoFiles.length > 0) startScanning(scanData);
   });
 
   // Drag & Drop
@@ -123,11 +126,11 @@ document.addEventListener('DOMContentLoaded', () => {
   dropzoneCard.addEventListener('drop', async (e) => {
     const dt = e.dataTransfer;
     if (dt.items && dt.items.length > 0) {
-      const files = await window.mediaScanner.processDataTransferItems(dt.items);
-      if (files.length > 0) startScanning(files);
+      const scanData = await window.mediaScanner.processDataTransferItems(dt.items);
+      if (scanData.videoFiles.length > 0) startScanning(scanData);
     } else if (dt.files && dt.files.length > 0) {
-      const files = window.mediaScanner.processFileList(dt.files);
-      if (files.length > 0) startScanning(files);
+      const scanData = window.mediaScanner.processFileList(dt.files);
+      if (scanData.videoFiles.length > 0) startScanning(scanData);
     }
   });
 
@@ -141,18 +144,19 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // --- SCANNING WORKFLOW ---
-  async function startScanning(files) {
+  async function startScanning(scanData) {
     scannedRecords = [];
     dropzoneSection.classList.add('hidden');
     progressSection.classList.remove('hidden');
     dashboardSection.classList.add('hidden');
 
+    const total = scanData.videoFiles ? scanData.videoFiles.length : 0;
     progressBarFill.style.width = '0%';
     progressPercent.textContent = '0%';
-    progressSubtext.textContent = `Processing 0 of ${files.length} video files`;
+    progressSubtext.textContent = `Processing 0 of ${total} video files`;
 
     await window.mediaScanner.scanBatch(
-      files,
+      scanData,
       (prog) => {
         progressBarFill.style.width = `${prog.percent}%`;
         progressPercent.textContent = `${prog.percent}%`;
@@ -160,18 +164,6 @@ document.addEventListener('DOMContentLoaded', () => {
         currentScanningFile.textContent = prog.currentFileName;
       },
       (record) => {
-        const subs = record.analysis ? record.analysis.subtitles : [];
-        if (subs && subs.length > 0) {
-          record.subStatus = 'soft-subs';
-        } else {
-          // Check if filename explicitly mentions hardsub / aradub
-          const fName = record.fileName.toLowerCase();
-          if (fName.includes('hardsub') || fName.includes('aradub') || fName.includes('subbed')) {
-            record.subStatus = 'hard-subs';
-          } else {
-            record.subStatus = 'no-subs';
-          }
-        }
         scannedRecords.push(record);
       }
     );
@@ -186,21 +178,24 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateDashboard() {
     const total = scannedRecords.length;
     const softsubs = scannedRecords.filter(r => r.subStatus === 'soft-subs');
+    const sidecars = scannedRecords.filter(r => r.subStatus === 'sidecar-subs');
     const hardsubs = scannedRecords.filter(r => r.subStatus === 'hard-subs');
     const nosubs = scannedRecords.filter(r => r.subStatus === 'no-subs');
 
-    const subtitledCount = softsubs.length; // Only genuine soft embedded tracks count towards embedded subs ratio
-    const pct = total > 0 ? Math.round((subtitledCount / total) * 100) : 0;
+    const totalSubtitled = softsubs.length + sidecars.length + hardsubs.length;
 
     if (statTotalFiles) statTotalFiles.textContent = total;
-    if (statSubtitledCount) statSubtitledCount.textContent = subtitledCount;
-    if (statNoSubCount) statNoSubCount.textContent = nosubs.length;
-    if (statCoveragePct) statCoveragePct.textContent = `${pct}%`;
+    if (statSubtitledCount) statSubtitledCount.textContent = totalSubtitled;
+    if (statSoftsubCount) statSoftsubCount.textContent = softsubs.length;
+    if (statSidecarCount) statSidecarCount.textContent = sidecars.length;
+    if (statHardsubCount) statHardsubCount.textContent = hardsubs.length;
 
     if (countAll) countAll.textContent = total;
-    if (countHasSubs) countHasSubs.textContent = subtitledCount;
-    if (countNoSubs) countNoSubs.textContent = nosubs.length;
+    if (countHasSubs) countHasSubs.textContent = totalSubtitled;
+    if (countSoftSubs) countSoftSubs.textContent = softsubs.length;
+    if (countSidecarSubs) countSidecarSubs.textContent = sidecars.length;
     if (countHardSubs) countHardSubs.textContent = hardsubs.length;
+    if (countNoSubs) countNoSubs.textContent = nosubs.length;
 
     renderFilteredMedia();
   }
@@ -230,9 +225,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function getFilteredRecords() {
     return scannedRecords.filter(record => {
-      if (currentFilter === 'has-subs' && record.subStatus !== 'soft-subs') return false;
-      if (currentFilter === 'no-subs' && record.subStatus !== 'no-subs') return false;
+      if (currentFilter === 'has-subs' && record.subStatus === 'no-subs') return false;
+      if (currentFilter === 'soft-subs' && record.subStatus !== 'soft-subs') return false;
+      if (currentFilter === 'sidecar-subs' && record.subStatus !== 'sidecar-subs') return false;
       if (currentFilter === 'hard-subs' && record.subStatus !== 'hard-subs') return false;
+      if (currentFilter === 'no-subs' && record.subStatus !== 'no-subs') return false;
 
       if (searchQuery) {
         const titleMatch = record.fileName.toLowerCase().includes(searchQuery);
@@ -241,7 +238,8 @@ document.addEventListener('DOMContentLoaded', () => {
           (s.language && s.language.toLowerCase().includes(searchQuery)) ||
           (s.format && s.format.toLowerCase().includes(searchQuery))
         );
-        return titleMatch || pathMatch || langMatch;
+        const sidecarMatch = record.sidecarSubs && record.sidecarSubs.some(s => s.toLowerCase().includes(searchQuery));
+        return titleMatch || pathMatch || langMatch || sidecarMatch;
       }
 
       return true;
@@ -285,16 +283,19 @@ document.addEventListener('DOMContentLoaded', () => {
       let trackChipsHtml = '';
 
       if (record.subStatus === 'soft-subs') {
-        statusBadge = `<div class="sub-status-badge sub-badge-has"><i class="fa-solid fa-closed-captioning"></i> ${subs.length} Embedded Subtitle Track${subs.length > 1 ? 's' : ''}</div>`;
+        statusBadge = `<div class="sub-status-badge sub-badge-has"><i class="fa-solid fa-closed-captioning"></i> ${subs.length} Embedded Softsub Stream${subs.length > 1 ? 's' : ''}</div>`;
         const langs = [...new Set(subs.map(s => s.language || 'und'))].slice(0, 4);
         const formats = [...new Set(subs.map(s => s.format))].slice(0, 3);
         trackChipsHtml += langs.map(l => `<span class="track-chip track-chip-lang"><i class="fa-solid fa-globe"></i> ${l.toUpperCase()}</span>`).join('');
         trackChipsHtml += formats.map(f => `<span class="track-chip"><i class="fa-solid fa-file-lines"></i> ${f}</span>`).join('');
+      } else if (record.subStatus === 'sidecar-subs') {
+        statusBadge = `<div class="sub-status-badge" style="background: rgba(79,70,229,0.15); color: #818cf8; border: 1px solid rgba(79,70,229,0.3);"><i class="fa-solid fa-file-audio"></i> Sidecar SRT Subtitle File</div>`;
+        trackChipsHtml = record.sidecarSubs.map(sName => `<span class="track-chip track-chip-lang" style="background: rgba(79,70,229,0.2); color: #a5b4fc;"><i class="fa-solid fa-file-lines"></i> ${escapeHtml(sName)}</span>`).join('');
       } else if (record.subStatus === 'hard-subs') {
-        statusBadge = `<div class="sub-status-badge sub-badge-hard" style="background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3);"><i class="fa-solid fa-tag"></i> Tagged: Hardcoded Subtitles</div>`;
+        statusBadge = `<div class="sub-status-badge sub-badge-hard" style="background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3);"><i class="fa-solid fa-tag"></i> Hardcoded Subtitles</div>`;
         trackChipsHtml = `<span class="track-chip track-chip-lang" style="background: rgba(245,158,11,0.2); color: var(--warning);"><i class="fa-solid fa-eye"></i> BURNED-IN SUBTITLES</span>`;
       } else {
-        statusBadge = `<div class="sub-status-badge sub-badge-none"><i class="fa-solid fa-circle-xmark"></i> No Embedded Subtitles</div>`;
+        statusBadge = `<div class="sub-status-badge sub-badge-none"><i class="fa-solid fa-circle-xmark"></i> No Subtitles Found</div>`;
       }
 
       card.innerHTML = `
@@ -310,7 +311,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="media-card-footer">
           <span class="file-size-label"><i class="fa-solid fa-hard-drive"></i> ${record.fileSizeFormatted}</span>
           <div style="display: flex; gap: 0.35rem;">
-            ${record.subStatus !== 'soft-subs' ? `
+            ${record.subStatus !== 'soft-subs' && record.subStatus !== 'sidecar-subs' ? `
               <button class="btn btn-outline btn-sm tag-btn" data-id="${record.id}" title="Toggle Hardsub Tag">
                 <i class="fa-solid fa-tag"></i> ${record.subStatus === 'hard-subs' ? 'Untag' : 'Tag Hardsub'}
               </button>
@@ -345,15 +346,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
       let statusHtml = '';
       if (record.subStatus === 'soft-subs') {
-        statusHtml = `<span class="text-success" style="font-weight: 600;"><i class="fa-solid fa-circle-check"></i> ${subs.length} Subtitle Track(s)</span>`;
+        statusHtml = `<span class="text-success" style="font-weight: 600;"><i class="fa-solid fa-circle-check"></i> ${subs.length} Soft Track(s)</span>`;
+      } else if (record.subStatus === 'sidecar-subs') {
+        statusHtml = `<span style="color: #818cf8; font-weight: 600;"><i class="fa-solid fa-file-audio"></i> Sidecar SRT</span>`;
       } else if (record.subStatus === 'hard-subs') {
-        statusHtml = `<span class="text-warning" style="font-weight: 600;"><i class="fa-solid fa-tag"></i> Tagged Hardsub</span>`;
+        statusHtml = `<span class="text-warning" style="font-weight: 600;"><i class="fa-solid fa-tag"></i> Hardcoded Subtitle</span>`;
       } else {
         statusHtml = `<span class="text-danger" style="font-weight: 500;"><i class="fa-solid fa-circle-xmark"></i> None</span>`;
       }
 
-      const langs = record.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.language || 'und'))].join(', ') : '—';
-      const formats = record.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.format))].join(', ') : '—';
+      const langs = record.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.language || 'und'))].join(', ') : (record.subStatus === 'sidecar-subs' ? 'Sidecar File' : (record.subStatus === 'hard-subs' ? 'Burned-in' : '—'));
+      const formats = record.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.format))].join(', ') : (record.subStatus === 'sidecar-subs' ? 'SRT File' : (record.subStatus === 'hard-subs' ? 'Hardsub' : '—'));
 
       tr.innerHTML = `
         <td>
@@ -405,12 +408,25 @@ document.addEventListener('DOMContentLoaded', () => {
     modalSummaryPills.innerHTML = `
       <span class="format-pill format-${ext.toLowerCase()}">${ext} Container</span>
       <span class="track-chip"><i class="fa-solid fa-hard-drive"></i> ${record.fileSizeFormatted}</span>
-      <span class="track-chip track-chip-lang"><i class="fa-solid fa-layer-group"></i> ${subs.length} Subtitle Track${subs.length !== 1 ? 's' : ''}</span>
+      <span class="track-chip track-chip-lang"><i class="fa-solid fa-layer-group"></i> ${record.subStatus.toUpperCase()}</span>
       <span class="track-chip"><i class="fa-solid fa-microchip"></i> ${analysis.parsedBy || 'MediaInfo WASM'}</span>
     `;
 
-    // Subtitle Tracks List
-    if (subs.length === 0) {
+    // Subtitle Tracks List or Notice
+    if (record.subStatus === 'sidecar-subs') {
+      modalSubtitleTracksList.innerHTML = `
+        <div class="hardsub-notice-card" style="border-color: rgba(79,70,229,0.4); background: rgba(79,70,229,0.1);">
+          <div class="notice-icon"><i class="fa-solid fa-file-audio text-accent"></i></div>
+          <div class="notice-content">
+            <h4 style="color: #a5b4fc;">Sidecar Subtitle File Detected (.srt)</h4>
+            <p>Matching sidecar subtitle file(s) found in directory:</p>
+            <div class="notice-bullets">
+              ${record.sidecarSubs.map(s => `<span>&bull; <strong>${escapeHtml(s)}</strong></span>`).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (subs.length === 0) {
       modalSubtitleTracksList.innerHTML = `
         <div class="hardsub-notice-card">
           <div class="notice-icon"><i class="fa-solid fa-circle-info text-warning"></i></div>
@@ -555,14 +571,12 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     if (scannedRecords.length === 0) return;
 
-    let csvContent = 'File Name,Relative Path,Has Subtitles,Subtitle Count,Languages,Formats,Size\n';
+    let csvContent = 'File Name,Relative Path,Subtitle Status,Subtitle Count,Languages,Formats,Size\n';
     scannedRecords.forEach(r => {
-      const hasSubs = r.subStatus === 'soft-subs';
       const subs = r.analysis ? r.analysis.subtitles : [];
-      const langs = hasSubs ? [...new Set(subs.map(s => s.language))].join('; ') : (r.subStatus === 'hard-subs' ? 'Tagged Hardsub' : 'None');
-      const formats = hasSubs ? [...new Set(subs.map(s => s.format))].join('; ') : (r.subStatus === 'hard-subs' ? 'Hardsub' : 'None');
+      const langs = r.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.language))].join('; ') : (r.subStatus === 'sidecar-subs' ? r.sidecarSubs.join('; ') : (r.subStatus === 'hard-subs' ? 'Hardsub' : 'None'));
 
-      csvContent += `"${r.fileName}","${r.filePath}","${hasSubs ? 'YES' : 'NO'}",${subs.length},"${langs}","${formats}","${r.fileSizeFormatted}"\n`;
+      csvContent += `"${r.fileName}","${r.filePath}","${r.subStatus.toUpperCase()}",${subs.length},"${langs}","${r.fileSizeFormatted}"\n`;
     });
 
     downloadBlob(csvContent, 'SubDetect_Report.csv', 'text/csv;charset=utf-8;');
@@ -576,8 +590,8 @@ document.addEventListener('DOMContentLoaded', () => {
       fileName: r.fileName,
       filePath: r.filePath,
       fileSize: r.fileSizeFormatted,
-      hasEmbeddedSubtitles: r.subStatus === 'soft-subs',
-      isTaggedHardsub: r.subStatus === 'hard-subs',
+      subStatus: r.subStatus,
+      sidecarSubs: r.sidecarSubs || [],
       softSubtitles: r.analysis ? r.analysis.subtitles : []
     }));
 
@@ -591,7 +605,7 @@ document.addEventListener('DOMContentLoaded', () => {
       .map(r => r.fileName);
 
     if (missing.length === 0) {
-      alert('All scanned videos have subtitles!');
+      alert('All scanned videos have subtitles (embedded softsubs, sidecar SRT, or hardsubs)!');
       return;
     }
 

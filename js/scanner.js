@@ -1,41 +1,44 @@
 /**
  * Folder Scanner & Batch Queue Manager
  * Traverses file trees (Drag & Drop, WebKitDirectory, File System Access API)
- * Filters video files and feeds them to the processing pipeline with live updates.
+ * Detects video files, sidecar subtitle files (.srt, .vtt, .ass), and correlates them.
  */
 class MediaScanner {
   constructor() {
     this.videoExtensions = new Set(['mkv', 'mp4', 'm4v', 'avi', 'webm', 'ts', 'mov']);
+    this.subExtensions = new Set(['srt', 'ass', 'vtt', 'sub', 'idx', 'sup']);
   }
 
-  /**
-   * Check if file is a supported video format
-   */
   isVideoFile(file) {
     if (!file || !file.name) return false;
     const ext = file.name.split('.').pop().toLowerCase();
     return this.videoExtensions.has(ext);
   }
 
-  /**
-   * Process FileList from HTML file input
-   */
-  processFileList(fileList) {
-    const files = [];
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
-      if (this.isVideoFile(file)) {
-        files.push(file);
-      }
-    }
-    return files;
+  isSubtitleFile(file) {
+    if (!file || !file.name) return false;
+    const ext = file.name.split('.').pop().toLowerCase();
+    return this.subExtensions.has(ext);
   }
 
-  /**
-   * Process Drag & Drop DataTransfer items recursively
-   */
+  isSupportedFile(file) {
+    return this.isVideoFile(file) || this.isSubtitleFile(file);
+  }
+
+  processFileList(fileList) {
+    const videoFiles = [];
+    const subtitleFiles = [];
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      if (this.isVideoFile(file)) videoFiles.push(file);
+      else if (this.isSubtitleFile(file)) subtitleFiles.push(file);
+    }
+    return { videoFiles, subtitleFiles };
+  }
+
   async processDataTransferItems(items) {
-    const files = [];
+    const videoFiles = [];
+    const subtitleFiles = [];
     const entries = [];
 
     for (let i = 0; i < items.length; i++) {
@@ -46,37 +49,33 @@ class MediaScanner {
           entries.push(entry);
         } else {
           const file = item.getAsFile();
-          if (file && this.isVideoFile(file)) {
-            files.push(file);
-          }
+          if (file && this.isVideoFile(file)) videoFiles.push(file);
+          else if (file && this.isSubtitleFile(file)) subtitleFiles.push(file);
         }
       }
     }
 
     for (const entry of entries) {
-      const entryFiles = await this.readFileSystemEntry(entry);
-      files.push(...entryFiles);
+      const res = await this.readFileSystemEntry(entry);
+      videoFiles.push(...res.videoFiles);
+      subtitleFiles.push(...res.subtitleFiles);
     }
 
-    return files;
+    return { videoFiles, subtitleFiles };
   }
 
-  /**
-   * Recursively read WebKitFileSystemEntry (DirectoryEntry / FileEntry)
-   */
   async readFileSystemEntry(entry, pathPrefix = '') {
-    const files = [];
+    const videoFiles = [];
+    const subtitleFiles = [];
 
     if (entry.isFile) {
       return new Promise((resolve) => {
         entry.file((file) => {
-          if (this.isVideoFile(file)) {
-            // Attach relative path property
-            file.relativePath = pathPrefix ? `${pathPrefix}/${file.name}` : file.name;
-            files.push(file);
-          }
-          resolve(files);
-        }, () => resolve([]));
+          file.relativePath = pathPrefix ? `${pathPrefix}/${file.name}` : file.name;
+          if (this.isVideoFile(file)) videoFiles.push(file);
+          else if (this.isSubtitleFile(file)) subtitleFiles.push(file);
+          resolve({ videoFiles, subtitleFiles });
+        }, () => resolve({ videoFiles, subtitleFiles }));
       });
     } else if (entry.isDirectory) {
       const dirReader = entry.createReader();
@@ -84,72 +83,84 @@ class MediaScanner {
         return new Promise((resolve) => {
           dirReader.readEntries(async (subEntries) => {
             if (subEntries.length === 0) {
-              resolve(files);
+              resolve({ videoFiles, subtitleFiles });
             } else {
               const currentPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name;
               for (const subEntry of subEntries) {
-                const subFiles = await this.readFileSystemEntry(subEntry, currentPath);
-                files.push(...subFiles);
+                const subRes = await this.readFileSystemEntry(subEntry, currentPath);
+                videoFiles.push(...subRes.videoFiles);
+                subtitleFiles.push(...subRes.subtitleFiles);
               }
-              // Read remaining entries if batching occurs
-              const moreFiles = await readEntries();
-              files.push(...moreFiles);
-              resolve(files);
+              const more = await readEntries();
+              videoFiles.push(...more.videoFiles);
+              subtitleFiles.push(...more.subtitleFiles);
+              resolve({ videoFiles, subtitleFiles });
             }
-          }, () => resolve([]));
+          }, () => resolve({ videoFiles, subtitleFiles }));
         });
       };
       return await readEntries();
     }
-    return files;
+    return { videoFiles, subtitleFiles };
   }
 
-  /**
-   * Modern Directory Picker via showDirectoryPicker API
-   */
   async pickDirectory() {
-    if (typeof window.showDirectoryPicker !== 'function') {
-      return null;
-    }
+    if (typeof window.showDirectoryPicker !== 'function') return null;
     try {
       const dirHandle = await window.showDirectoryPicker();
-      const files = [];
-      await this.traverseDirectoryHandle(dirHandle, dirHandle.name, files);
-      return files;
+      const videoFiles = [];
+      const subtitleFiles = [];
+      await this.traverseDirectoryHandle(dirHandle, dirHandle.name, videoFiles, subtitleFiles);
+      return { videoFiles, subtitleFiles };
     } catch (err) {
-      if (err.name !== 'AbortError') {
-        console.warn('Directory picker error:', err);
-      }
+      if (err.name !== 'AbortError') console.warn('Directory picker error:', err);
       return null;
     }
   }
 
-  /**
-   * Helper to recursively scan FileSystemDirectoryHandle
-   */
-  async traverseDirectoryHandle(dirHandle, currentPath, files) {
+  async traverseDirectoryHandle(dirHandle, currentPath, videoFiles, subtitleFiles) {
     for await (const entry of dirHandle.values()) {
       if (entry.kind === 'file') {
         const file = await entry.getFile();
-        if (this.isVideoFile(file)) {
-          file.relativePath = `${currentPath}/${file.name}`;
-          files.push(file);
-        }
+        file.relativePath = `${currentPath}/${file.name}`;
+        if (this.isVideoFile(file)) videoFiles.push(file);
+        else if (this.isSubtitleFile(file)) subtitleFiles.push(file);
       } else if (entry.kind === 'directory') {
-        await this.traverseDirectoryHandle(entry, `${currentPath}/${entry.name}`, files);
+        await this.traverseDirectoryHandle(entry, `${currentPath}/${entry.name}`, videoFiles, subtitleFiles);
       }
     }
   }
 
   /**
-   * Execute batch scan with live progress updates
+   * Helper to strip file extension and language tags for matching
    */
-  async scanBatch(files, onProgress, onFileComplete) {
+  getFileStem(filename) {
+    if (!filename) return '';
+    let stem = filename.substring(0, filename.lastIndexOf('.')) || filename;
+    // Strip language tags like .en, .ar, .ara, .eng
+    stem = stem.replace(/\.(en|ar|ara|eng|fre|fra|spa|ger|deu|ita|rus|zho|chi|jpn|kor)$/i, '');
+    return stem.toLowerCase().trim();
+  }
+
+  /**
+   * Execute batch scan with live progress updates & sidecar matching
+   */
+  async scanBatch(scanData, onProgress, onFileComplete) {
+    const videoFiles = scanData.videoFiles || (Array.isArray(scanData) ? scanData : []);
+    const subtitleFiles = scanData.subtitleFiles || [];
     const results = [];
-    const total = files.length;
+    const total = videoFiles.length;
+
+    // Index sidecar subtitle files by file stem
+    const sidecarMap = new Map();
+    subtitleFiles.forEach(subFile => {
+      const stem = this.getFileStem(subFile.name);
+      if (!sidecarMap.has(stem)) sidecarMap.set(stem, []);
+      sidecarMap.get(stem).push(subFile.name);
+    });
 
     for (let i = 0; i < total; i++) {
-      const file = files[i];
+      const file = videoFiles[i];
       const percent = Math.round(((i + 1) / total) * 100);
       
       if (onProgress) {
@@ -161,8 +172,25 @@ class MediaScanner {
         });
       }
 
-      // Analyze using MediaInfo WASM / Fast Parser
+      // Analyze container streams via MediaInfo WASM / Fast Header Parser
       const analysis = await window.mediaInfoEngine.analyzeFile(file);
+
+      // Check matching sidecar subtitle files
+      const stem = this.getFileStem(file.name);
+      const sidecarSubs = sidecarMap.get(stem) || [];
+
+      // Determine initial subtitle status
+      let subStatus = 'no-subs';
+      const hasSoft = analysis && analysis.hasSubtitles && analysis.subtitles.length > 0;
+      const fNameLower = file.name.toLowerCase();
+
+      if (hasSoft) {
+        subStatus = 'soft-subs';
+      } else if (sidecarSubs.length > 0) {
+        subStatus = 'sidecar-subs';
+      } else if (fNameLower.includes('hardsub') || fNameLower.includes('aradub') || fNameLower.includes('subbed')) {
+        subStatus = 'hard-subs';
+      }
 
       const mediaRecord = {
         id: `media_${Date.now()}_${i}`,
@@ -171,22 +199,18 @@ class MediaScanner {
         filePath: file.webkitRelativePath || file.relativePath || file.name,
         fileSize: file.size,
         fileSizeFormatted: this.formatBytes(file.size),
-        analysis: analysis
+        analysis: analysis,
+        subStatus: subStatus,
+        sidecarSubs: sidecarSubs
       };
 
       results.push(mediaRecord);
-
-      if (onFileComplete) {
-        onFileComplete(mediaRecord);
-      }
+      if (onFileComplete) onFileComplete(mediaRecord);
     }
 
     return results;
   }
 
-  /**
-   * Format bytes to human readable size (MB, GB)
-   */
   formatBytes(bytes, decimals = 2) {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;

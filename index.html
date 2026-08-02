@@ -135,31 +135,41 @@
 
           <div class="stat-card">
             <div class="stat-icon bg-success-soft">
-              <i class="fa-solid fa-closed-captioning text-success"></i>
+              <i class="fa-solid fa-circle-check text-success"></i>
             </div>
             <div class="stat-data">
               <span class="stat-value text-success" id="statSubtitledCount">0</span>
-              <span class="stat-label">With Embedded Subtitles</span>
-            </div>
-          </div>
-
-          <div class="stat-card">
-            <div class="stat-icon bg-danger-soft">
-              <i class="fa-solid fa-circle-xmark text-danger"></i>
-            </div>
-            <div class="stat-data">
-              <span class="stat-value text-danger" id="statNoSubCount">0</span>
-              <span class="stat-label">No Subtitles Found</span>
+              <span class="stat-label">Total Subtitled</span>
             </div>
           </div>
 
           <div class="stat-card">
             <div class="stat-icon bg-accent-soft">
-              <i class="fa-solid fa-chart-pie text-accent"></i>
+              <i class="fa-solid fa-closed-captioning text-accent"></i>
             </div>
             <div class="stat-data">
-              <span class="stat-value text-accent" id="statCoveragePct">0%</span>
-              <span class="stat-label">Subtitle Ratio</span>
+              <span class="stat-value text-accent" id="statSoftsubCount">0</span>
+              <span class="stat-label">Embedded Softsubs</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon bg-primary-soft">
+              <i class="fa-solid fa-file-audio text-primary"></i>
+            </div>
+            <div class="stat-data">
+              <span class="stat-value text-primary" id="statSidecarCount">0</span>
+              <span class="stat-label">Sidecar SRT Files</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon bg-warning-soft">
+              <i class="fa-solid fa-tag text-warning"></i>
+            </div>
+            <div class="stat-data">
+              <span class="stat-value text-warning" id="statHardsubCount">0</span>
+              <span class="stat-label">Hardcoded / Hardsub</span>
             </div>
           </div>
         </div>
@@ -175,9 +185,11 @@
           <div class="filter-group">
             <span class="filter-label"><i class="fa-solid fa-filter"></i> Filter:</span>
             <button class="filter-chip active" data-filter="all">All (<span id="countAll">0</span>)</button>
-            <button class="filter-chip chip-success" data-filter="has-subs">Has Subtitles (<span id="countHasSubs">0</span>)</button>
-            <button class="filter-chip chip-danger" data-filter="no-subs">No Subtitles (<span id="countNoSubs">0</span>)</button>
-            <button class="filter-chip chip-warning" data-filter="hard-subs">Tagged Hardsubs (<span id="countHardSubs">0</span>)</button>
+            <button class="filter-chip chip-success" data-filter="has-subs">Subtitled (<span id="countHasSubs">0</span>)</button>
+            <button class="filter-chip chip-accent" data-filter="soft-subs">Embedded Softsubs (<span id="countSoftSubs">0</span>)</button>
+            <button class="filter-chip chip-primary" data-filter="sidecar-subs">Sidecar SRT (<span id="countSidecarSubs">0</span>)</button>
+            <button class="filter-chip chip-warning" data-filter="hard-subs">Hardcoded (<span id="countHardSubs">0</span>)</button>
+            <button class="filter-chip chip-danger" data-filter="no-subs">Missing Subs (<span id="countNoSubs">0</span>)</button>
           </div>
 
           <div class="action-tools">
