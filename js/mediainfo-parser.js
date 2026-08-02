@@ -56,7 +56,7 @@ class MediaInfoEngine {
   async analyzeFile(file) {
     // Attempt Fast Native Header & Tail Parser first for instant verification
     const fastResult = await FastHeaderParser.parseFile(file);
-    if (fastResult) {
+    if (fastResult && fastResult.hasSubtitles) {
       return fastResult;
     }
 

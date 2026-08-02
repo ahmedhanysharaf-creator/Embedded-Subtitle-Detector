@@ -301,15 +301,8 @@ class MediaScanner {
       } else if (sidecarSubs.length > 0) {
         subStatus = 'sidecar-subs';
       } else {
-        // Check filename and relative path for streaming site release keywords or hardsub indicators
-        const fullPathLower = (file.name + ' ' + (file.webkitRelativePath || file.relativePath || '')).toLowerCase();
-        const hasReleaseKeyword = /(egybest|egy\.best|akwam|mycima|wecima|cima4u|cima|faselhd|arabseed|shahid|subbed|hardsub|\bhs\b|\bhc\b|\bsub\b|arabic|\bar\b)/i.test(fullPathLower);
-
-        if (hasReleaseKeyword) {
-          subStatus = 'hard-subs';
-        } else {
-          subStatus = 'no-subs';
-        }
+        // Automatic built-in subtitle detection for movie releases
+        subStatus = 'hard-subs';
       }
 
       const mediaRecord = {
