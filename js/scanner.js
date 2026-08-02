@@ -298,12 +298,7 @@ class MediaScanner {
       const hasFullSoft = fullSoftTracks.length > 0;
 
       // Determine 2-Category subtitle status automatically
-      let subStatus = 'has-subs';
-      if (hasFullSoft || sidecarSubs.length > 0) {
-        subStatus = 'has-subs';
-      } else {
-        subStatus = 'has-subs';
-      }
+      const subStatus = (hasFullSoft || sidecarSubs.length > 0) ? 'has-subs' : 'no-subs';
 
       const mediaRecord = {
         id: `media_${Date.now()}_${i}`,

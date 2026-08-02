@@ -370,17 +370,6 @@ document.addEventListener('DOMContentLoaded', () => {
       mediaTableBody.appendChild(tr);
     });
   }
-        <td>
-          <button class="btn btn-outline btn-sm inspect-btn" data-id="${record.id}">
-            <i class="fa-solid fa-sliders"></i> Details
-          </button>
-        </td>
-      `;
-
-      tr.querySelector('.inspect-btn').addEventListener('click', () => openModalInspector(record));
-      mediaTableBody.appendChild(tr);
-    });
-  }
 
   // --- VIEW TOGGLE ---
   viewGridBtn.addEventListener('click', () => {
@@ -576,7 +565,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let csvContent = 'File Name,Relative Path,Subtitle Status,Subtitle Count,Languages,Formats,Size\n';
     scannedRecords.forEach(r => {
       const subs = r.analysis ? r.analysis.subtitles : [];
-      const langs = r.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.language))].join('; ') : (r.subStatus === 'sidecar-subs' ? r.sidecarSubs.join('; ') : (r.subStatus === 'hard-subs' ? 'Hardsub' : 'None'));
+      const langs = r.subStatus === 'has-subs' ? (subs.length > 0 ? [...new Set(subs.map(s => s.language))].join('; ') : (r.sidecarSubs.length > 0 ? r.sidecarSubs.join('; ') : 'Built-in Subtitles')) : 'None';
 
       csvContent += `"${r.fileName}","${r.filePath}","${r.subStatus.toUpperCase()}",${subs.length},"${langs}","${r.fileSizeFormatted}"\n`;
     });
