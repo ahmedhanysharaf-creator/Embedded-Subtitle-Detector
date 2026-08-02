@@ -16,7 +16,7 @@ class MediaInfoEngine {
     if (this.mediainfoInstance) return this.mediainfoInstance;
     if (this.initPromise) return this.initPromise;
 
-    this.initPromise = new Promise((resolve, reject) => {
+    this.initPromise = new Promise((resolve) => {
       if (typeof window.MediaInfo === 'undefined') {
         console.warn('MediaInfo library script not loaded on window object');
         resolve(null);
@@ -40,14 +40,16 @@ class MediaInfoEngine {
    * Analyze media file chunk-by-chunk using MediaInfo WASM
    */
   async analyzeFile(file) {
-    // Attempt Fast Native Header Parser first for instant preliminary verification
+    // Attempt Fast Native Header & Tail Parser first for instant verification
     const fastResult = await FastHeaderParser.parseFile(file);
+    if (fastResult && fastResult.hasSubtitles) {
+      return fastResult;
+    }
 
     // Initialize WASM instance
     const mediainfo = await this.init();
 
     if (!mediainfo) {
-      console.warn('Using FastHeaderParser fallback (WASM unavailable)');
       return fastResult || this.fallbackUnknown(file);
     }
 
@@ -70,7 +72,9 @@ class MediaInfoEngine {
       };
 
       const miResult = await mediainfo.analyzeData(getSize, readChunk);
-      return this.parseMediaInfoOutput(file, miResult, fastResult);
+      const parsed = this.parseMediaInfoOutput(file, miResult, fastResult);
+      if (parsed && parsed.hasSubtitles) return parsed;
+      return fastResult || parsed;
     } catch (err) {
       console.warn(`MediaInfo analysis failed for ${file.name}:`, err);
       return fastResult || this.fallbackUnknown(file);
@@ -100,16 +104,16 @@ class MediaInfoEngine {
       else if (rawFormat.includes('VobSub')) formatDisplay = 'VobSub';
       else if (rawFormat.includes('tx3g') || rawFormat.includes('Timed Text')) formatDisplay = 'MOV_TEXT (tx3g)';
 
-      // Language detection
-      const lang = tr.Language || tr['Language/String'] || tr.Language_String || tr.Language_String1 || 'und';
-      const langCode = tr.Language_String2 || lang.slice(0, 3).toLowerCase();
+      // Language detection & formatting
+      const rawLang = tr.Language || tr['Language/String'] || tr.Language_String || tr.Language_String1 || tr.Language_String2 || 'und';
+      const formattedLang = typeof FastHeaderParser !== 'undefined' ? FastHeaderParser.formatLanguage(rawLang) : rawLang;
 
       return {
         trackId: idx + 1,
         format: formatDisplay,
         rawFormat: rawFormat,
-        language: lang,
-        langCode: langCode,
+        language: formattedLang,
+        langCode: rawLang.slice(0, 3).toLowerCase(),
         title: tr.Title || tr.Header || `Track #${idx + 1}`,
         isDefault: (tr.Default === 'Yes' || tr.Default === '1'),
         isForced: (tr.Forced === 'Yes' || tr.Forced === '1')
