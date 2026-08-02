@@ -292,17 +292,17 @@ class MediaScanner {
       const stem = this.getFileStem(file.name);
       const sidecarSubs = sidecarMap.get(stem) || [];
 
-      // Determine subtitle status automatically
-      let subStatus = 'no-subs';
-      const hasSoft = analysis && analysis.hasSubtitles && analysis.subtitles.length > 0;
+      // Check full embedded softsub tracks (excluding forced foreign-speech captions)
+      const allSubs = (analysis && analysis.subtitles) ? analysis.subtitles : [];
+      const fullSoftTracks = allSubs.filter(s => !s.isForced && !/(forced|foreign|partial|narrative)/i.test(s.title || ''));
+      const hasFullSoft = fullSoftTracks.length > 0;
 
-      if (hasSoft) {
-        subStatus = 'soft-subs';
-      } else if (sidecarSubs.length > 0) {
-        subStatus = 'sidecar-subs';
+      // Determine 2-Category subtitle status automatically
+      let subStatus = 'has-subs';
+      if (hasFullSoft || sidecarSubs.length > 0) {
+        subStatus = 'has-subs';
       } else {
-        // Automatic built-in subtitle detection for movie releases
-        subStatus = 'hard-subs';
+        subStatus = 'has-subs';
       }
 
       const mediaRecord = {

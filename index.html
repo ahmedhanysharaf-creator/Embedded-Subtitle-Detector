@@ -122,14 +122,14 @@
       <section class="dashboard-section hidden" id="dashboardSection">
         
         <!-- Summary Stats Cards -->
-        <div class="stats-grid">
+        <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
           <div class="stat-card">
             <div class="stat-icon bg-primary-soft">
               <i class="fa-solid fa-film text-primary"></i>
             </div>
             <div class="stat-data">
               <span class="stat-value" id="statTotalFiles">0</span>
-              <span class="stat-label">Total Videos</span>
+              <span class="stat-label">Total Movies</span>
             </div>
           </div>
 
@@ -139,37 +139,17 @@
             </div>
             <div class="stat-data">
               <span class="stat-value text-success" id="statSubtitledCount">0</span>
-              <span class="stat-label">Total Subtitled</span>
+              <span class="stat-label">Movies with Built-in Subtitles</span>
             </div>
           </div>
 
           <div class="stat-card">
-            <div class="stat-icon bg-accent-soft">
-              <i class="fa-solid fa-closed-captioning text-accent"></i>
+            <div class="stat-icon bg-danger-soft">
+              <i class="fa-solid fa-circle-xmark text-danger"></i>
             </div>
             <div class="stat-data">
-              <span class="stat-value text-accent" id="statSoftsubCount">0</span>
-              <span class="stat-label">Embedded Softsubs</span>
-            </div>
-          </div>
-
-          <div class="stat-card">
-            <div class="stat-icon bg-primary-soft">
-              <i class="fa-solid fa-file-audio text-primary"></i>
-            </div>
-            <div class="stat-data">
-              <span class="stat-value text-primary" id="statSidecarCount">0</span>
-              <span class="stat-label">Sidecar SRT Files</span>
-            </div>
-          </div>
-
-          <div class="stat-card">
-            <div class="stat-icon bg-warning-soft">
-              <i class="fa-solid fa-tag text-warning"></i>
-            </div>
-            <div class="stat-data">
-              <span class="stat-value text-warning" id="statHardsubCount">0</span>
-              <span class="stat-label">Hardcoded / Hardsub</span>
+              <span class="stat-value text-danger" id="statNoSubCount">0</span>
+              <span class="stat-label">Movies with No Subtitles</span>
             </div>
           </div>
         </div>
@@ -178,26 +158,28 @@
         <div class="toolbar-card">
           <div class="search-box">
             <i class="fa-solid fa-magnifying-glass search-icon"></i>
-            <input type="text" id="searchInput" placeholder="Search by title, filename, or language...">
+            <input type="text" id="searchInput" placeholder="Search movies by title or filename...">
             <button class="clear-search-btn hidden" id="clearSearchBtn">&times;</button>
           </div>
 
           <div class="filter-group">
             <span class="filter-label"><i class="fa-solid fa-filter"></i> Filter:</span>
-            <button class="filter-chip active" data-filter="all">All (<span id="countAll">0</span>)</button>
-            <button class="filter-chip chip-success" data-filter="has-subs">Subtitled (<span id="countHasSubs">0</span>)</button>
-            <button class="filter-chip chip-accent" data-filter="soft-subs">Embedded Softsubs (<span id="countSoftSubs">0</span>)</button>
-            <button class="filter-chip chip-primary" data-filter="sidecar-subs">Sidecar SRT (<span id="countSidecarSubs">0</span>)</button>
-            <button class="filter-chip chip-warning" data-filter="hard-subs">Hardcoded (<span id="countHardSubs">0</span>)</button>
-            <button class="filter-chip chip-danger" data-filter="no-subs">Missing Subs (<span id="countNoSubs">0</span>)</button>
+            <button class="filter-chip active" data-filter="all">All Movies (<span id="countAll">0</span>)</button>
+            <button class="filter-chip chip-success" data-filter="has-subs">Built-in Subtitles (<span id="countHasSubs">0</span>)</button>
+            <button class="filter-chip chip-danger" data-filter="no-subs">No Subtitles (<span id="countNoSubs">0</span>)</button>
           </div>
 
           <div class="action-tools">
             <div class="dropdown">
               <button class="btn btn-outline btn-sm dropdown-trigger" id="exportDropdownBtn">
-                <i class="fa-solid fa-download"></i> Export <i class="fa-solid fa-chevron-down"></i>
+                <i class="fa-solid fa-download"></i> Export / Organize <i class="fa-solid fa-chevron-down"></i>
               </button>
               <div class="dropdown-menu" id="exportMenu">
+                <button class="dropdown-item" id="exportCsvBtn"><i class="fa-solid fa-file-csv text-accent"></i> Export Metadata (CSV)</button>
+                <button class="dropdown-item" id="exportJsonBtn"><i class="fa-solid fa-file-code text-warning"></i> Export Metadata (JSON)</button>
+                <button class="dropdown-item" id="exportMoveScriptBtn"><i class="fa-solid fa-folder-arrow-right text-success"></i> Export Target Folder Move Script (.ps1)</button>
+              </div>
+            </div>
                 <a href="#" id="exportCsvBtn"><i class="fa-solid fa-file-csv text-success"></i> Export CSV Report</a>
                 <a href="#" id="exportJsonBtn"><i class="fa-solid fa-file-code text-accent"></i> Export JSON Data</a>
                 <a href="#" id="copyMissingSubsBtn"><i class="fa-solid fa-copy text-warning"></i> Copy Titles Missing Subs</a>
@@ -295,9 +277,9 @@
   </div>
 
   <!-- Application Scripts -->
-  <script src="js/ebml-mp4-parser.js?v=13.0"></script>
-  <script src="js/mediainfo-parser.js?v=13.0"></script>
-  <script src="js/scanner.js?v=13.0"></script>
-  <script src="js/app.js?v=13.0"></script>
+  <script src="js/ebml-mp4-parser.js?v=14.0"></script>
+  <script src="js/mediainfo-parser.js?v=14.0"></script>
+  <script src="js/scanner.js?v=14.0"></script>
+  <script src="js/app.js?v=14.0"></script>
 </body>
 </html>

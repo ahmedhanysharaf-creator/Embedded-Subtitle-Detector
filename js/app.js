@@ -177,24 +177,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- DASHBOARD & STATS UPDATE ---
   function updateDashboard() {
     const total = scannedRecords.length;
-    const softsubs = scannedRecords.filter(r => r.subStatus === 'soft-subs');
-    const sidecars = scannedRecords.filter(r => r.subStatus === 'sidecar-subs');
-    const hardsubs = scannedRecords.filter(r => r.subStatus === 'hard-subs');
+    const subtitled = scannedRecords.filter(r => r.subStatus === 'has-subs');
     const nosubs = scannedRecords.filter(r => r.subStatus === 'no-subs');
 
-    const totalSubtitled = softsubs.length + sidecars.length + hardsubs.length;
+    const statNoSubCount = document.getElementById('statNoSubCount');
 
     if (statTotalFiles) statTotalFiles.textContent = total;
-    if (statSubtitledCount) statSubtitledCount.textContent = totalSubtitled;
-    if (statSoftsubCount) statSoftsubCount.textContent = softsubs.length;
-    if (statSidecarCount) statSidecarCount.textContent = sidecars.length;
-    if (statHardsubCount) statHardsubCount.textContent = hardsubs.length;
+    if (statSubtitledCount) statSubtitledCount.textContent = subtitled.length;
+    if (statNoSubCount) statNoSubCount.textContent = nosubs.length;
 
     if (countAll) countAll.textContent = total;
-    if (countHasSubs) countHasSubs.textContent = totalSubtitled;
-    if (countSoftSubs) countSoftSubs.textContent = softsubs.length;
-    if (countSidecarSubs) countSidecarSubs.textContent = sidecars.length;
-    if (countHardSubs) countHardSubs.textContent = hardsubs.length;
+    if (countHasSubs) countHasSubs.textContent = subtitled.length;
     if (countNoSubs) countNoSubs.textContent = nosubs.length;
 
     renderFilteredMedia();
@@ -225,10 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function getFilteredRecords() {
     return scannedRecords.filter(record => {
-      if (currentFilter === 'has-subs' && record.subStatus === 'no-subs') return false;
-      if (currentFilter === 'soft-subs' && record.subStatus !== 'soft-subs') return false;
-      if (currentFilter === 'sidecar-subs' && record.subStatus !== 'sidecar-subs') return false;
-      if (currentFilter === 'hard-subs' && record.subStatus !== 'hard-subs') return false;
+      if (currentFilter === 'has-subs' && record.subStatus !== 'has-subs') return false;
       if (currentFilter === 'no-subs' && record.subStatus !== 'no-subs') return false;
 
       if (searchQuery) {
@@ -238,8 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
           (s.language && s.language.toLowerCase().includes(searchQuery)) ||
           (s.format && s.format.toLowerCase().includes(searchQuery))
         );
-        const sidecarMatch = record.sidecarSubs && record.sidecarSubs.some(s => s.toLowerCase().includes(searchQuery));
-        return titleMatch || pathMatch || langMatch || sidecarMatch;
+        return titleMatch || pathMatch || langMatch;
       }
 
       return true;
@@ -282,20 +271,19 @@ document.addEventListener('DOMContentLoaded', () => {
       let statusBadge = '';
       let trackChipsHtml = '';
 
-      if (record.subStatus === 'soft-subs') {
-        statusBadge = `<div class="sub-status-badge sub-badge-has"><i class="fa-solid fa-closed-captioning"></i> ${subs.length} Embedded Softsub Stream${subs.length > 1 ? 's' : ''}</div>`;
-        const langs = [...new Set(subs.map(s => s.language || 'und'))].slice(0, 4);
-        const formats = [...new Set(subs.map(s => s.format))].slice(0, 3);
-        trackChipsHtml += langs.map(l => `<span class="track-chip track-chip-lang"><i class="fa-solid fa-globe"></i> ${l.toUpperCase()}</span>`).join('');
-        trackChipsHtml += formats.map(f => `<span class="track-chip"><i class="fa-solid fa-file-lines"></i> ${f}</span>`).join('');
-      } else if (record.subStatus === 'sidecar-subs') {
-        statusBadge = `<div class="sub-status-badge" style="background: rgba(79,70,229,0.15); color: #818cf8; border: 1px solid rgba(79,70,229,0.3);"><i class="fa-solid fa-file-audio"></i> Sidecar SRT Subtitle File</div>`;
-        trackChipsHtml = record.sidecarSubs.map(sName => `<span class="track-chip track-chip-lang" style="background: rgba(79,70,229,0.2); color: #a5b4fc;"><i class="fa-solid fa-file-lines"></i> ${escapeHtml(sName)}</span>`).join('');
-      } else if (record.subStatus === 'hard-subs') {
-        statusBadge = `<div class="sub-status-badge sub-badge-hard" style="background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3);"><i class="fa-solid fa-tag"></i> Hardcoded Subtitles</div>`;
-        trackChipsHtml = `<span class="track-chip track-chip-lang" style="background: rgba(245,158,11,0.2); color: var(--warning);"><i class="fa-solid fa-eye"></i> BURNED-IN SUBTITLES</span>`;
+      if (record.subStatus === 'has-subs') {
+        statusBadge = `<div class="sub-status-badge sub-badge-has" style="background: rgba(16, 185, 129, 0.15); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.3);"><i class="fa-solid fa-circle-check"></i> Built-in Subtitles Included</div>`;
+        if (subs.length > 0) {
+          const langs = [...new Set(subs.map(s => s.language || 'und'))].slice(0, 4);
+          const formats = [...new Set(subs.map(s => s.format))].slice(0, 3);
+          trackChipsHtml += langs.map(l => `<span class="track-chip track-chip-lang"><i class="fa-solid fa-globe"></i> ${l.toUpperCase()}</span>`).join('');
+          trackChipsHtml += formats.map(f => `<span class="track-chip"><i class="fa-solid fa-file-lines"></i> ${f}</span>`).join('');
+        } else {
+          trackChipsHtml = `<span class="track-chip track-chip-lang" style="background: rgba(16,185,129,0.2); color: var(--success);"><i class="fa-solid fa-eye"></i> SUBTITLED MOVIE</span>`;
+        }
       } else {
-        statusBadge = `<div class="sub-status-badge sub-badge-none"><i class="fa-solid fa-circle-xmark"></i> No Subtitles Found</div>`;
+        statusBadge = `<div class="sub-status-badge sub-badge-none" style="background: rgba(239, 68, 68, 0.15); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3);"><i class="fa-solid fa-circle-xmark"></i> No Subtitles</div>`;
+        trackChipsHtml = `<span class="track-chip" style="background: rgba(239,68,68,0.2); color: var(--danger);"><i class="fa-solid fa-ban"></i> RAW MOVIE</span>`;
       }
 
       card.innerHTML = `
@@ -311,11 +299,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="media-card-footer">
           <span class="file-size-label"><i class="fa-solid fa-hard-drive"></i> ${record.fileSizeFormatted}</span>
           <div style="display: flex; gap: 0.35rem;">
-            ${record.subStatus !== 'soft-subs' && record.subStatus !== 'sidecar-subs' ? `
-              <button class="btn btn-outline btn-sm tag-btn" data-id="${record.id}" title="Toggle Hardsub Tag">
-                <i class="fa-solid fa-tag"></i> ${record.subStatus === 'hard-subs' ? 'Untag' : 'Tag Hardsub'}
-              </button>
-            ` : ''}
+            <button class="btn btn-outline btn-sm tag-btn" data-id="${record.id}" title="Toggle Category">
+              <i class="fa-solid fa-arrows-rotate"></i> ${record.subStatus === 'has-subs' ? 'Move to No Subs' : 'Move to Subtitled'}
+            </button>
             <button class="btn btn-primary btn-sm inspect-btn" data-id="${record.id}">
               <i class="fa-solid fa-circle-info"></i> Inspect
             </button>
@@ -327,7 +313,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (tagBtn) {
         tagBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          record.subStatus = (record.subStatus === 'hard-subs') ? 'no-subs' : 'hard-subs';
+          record.subStatus = (record.subStatus === 'has-subs') ? 'no-subs' : 'has-subs';
           updateDashboard();
         });
       }
@@ -345,18 +331,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const ext = record.fileName.split('.').pop().toLowerCase();
 
       let statusHtml = '';
-      if (record.subStatus === 'soft-subs') {
-        statusHtml = `<span class="text-success" style="font-weight: 600;"><i class="fa-solid fa-circle-check"></i> ${subs.length} Soft Track(s)</span>`;
-      } else if (record.subStatus === 'sidecar-subs') {
-        statusHtml = `<span style="color: #818cf8; font-weight: 600;"><i class="fa-solid fa-file-audio"></i> Sidecar SRT</span>`;
-      } else if (record.subStatus === 'hard-subs') {
-        statusHtml = `<span class="text-warning" style="font-weight: 600;"><i class="fa-solid fa-tag"></i> Hardcoded Subtitle</span>`;
+      if (record.subStatus === 'has-subs') {
+        statusHtml = `<span class="text-success" style="font-weight: 600;"><i class="fa-solid fa-circle-check"></i> Built-in Subtitles</span>`;
       } else {
-        statusHtml = `<span class="text-danger" style="font-weight: 500;"><i class="fa-solid fa-circle-xmark"></i> None</span>`;
+        statusHtml = `<span class="text-danger" style="font-weight: 500;"><i class="fa-solid fa-circle-xmark"></i> No Subtitles</span>`;
       }
 
-      const langs = record.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.language || 'und'))].join(', ') : (record.subStatus === 'sidecar-subs' ? 'Sidecar File' : (record.subStatus === 'hard-subs' ? 'Burned-in' : '—'));
-      const formats = record.subStatus === 'soft-subs' ? [...new Set(subs.map(s => s.format))].join(', ') : (record.subStatus === 'sidecar-subs' ? 'SRT File' : (record.subStatus === 'hard-subs' ? 'Hardsub' : '—'));
+      const langs = record.subStatus === 'has-subs' ? (subs.length > 0 ? [...new Set(subs.map(s => s.language || 'und'))].join(', ') : 'Subtitled') : '—';
+      const formats = record.subStatus === 'has-subs' ? (subs.length > 0 ? [...new Set(subs.map(s => s.format))].join(', ') : 'Built-in') : '—';
 
       tr.innerHTML = `
         <td>
@@ -368,6 +350,26 @@ document.addEventListener('DOMContentLoaded', () => {
         <td>${escapeHtml(langs)}</td>
         <td>${escapeHtml(formats)}</td>
         <td style="font-family: var(--font-mono); font-size: 0.85rem;">${record.fileSizeFormatted}</td>
+        <td>
+          <button class="btn btn-outline btn-sm tag-btn" data-id="${record.id}" style="margin-right: 0.25rem;">
+            <i class="fa-solid fa-arrows-rotate"></i> ${record.subStatus === 'has-subs' ? 'To No Subs' : 'To Subtitled'}
+          </button>
+          <button class="btn btn-primary btn-sm inspect-btn" data-id="${record.id}">
+            <i class="fa-solid fa-sliders"></i> Details
+          </button>
+        </td>
+      `;
+
+      tr.querySelector('.tag-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        record.subStatus = (record.subStatus === 'has-subs') ? 'no-subs' : 'has-subs';
+        updateDashboard();
+      });
+
+      tr.querySelector('.inspect-btn').addEventListener('click', () => openModalInspector(record));
+      mediaTableBody.appendChild(tr);
+    });
+  }
         <td>
           <button class="btn btn-outline btn-sm inspect-btn" data-id="${record.id}">
             <i class="fa-solid fa-sliders"></i> Details
@@ -598,23 +600,27 @@ document.addEventListener('DOMContentLoaded', () => {
     downloadBlob(JSON.stringify(data, null, 2), 'SubDetect_Report.json', 'application/json');
   });
 
-  copyMissingSubsBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    const missing = scannedRecords
-      .filter(r => r.subStatus === 'no-subs')
-      .map(r => r.fileName);
+  const exportMoveScriptBtn = document.getElementById('exportMoveScriptBtn');
+  if (exportMoveScriptBtn) {
+    exportMoveScriptBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const subtitledRecords = scannedRecords.filter(r => r.subStatus === 'has-subs');
+      if (subtitledRecords.length === 0) {
+        alert('No movies with built-in subtitles found to organize.');
+        return;
+      }
 
-    if (missing.length === 0) {
-      alert('All scanned videos have subtitles (embedded softsubs, sidecar SRT, or hardsubs)!');
-      return;
-    }
+      let script = `# PowerShell Script: Move Movies with Built-in Subtitles to Target Folder\n`;
+      script += `# Target Folder: Subtitled_Movies\n\n`;
+      script += `New-Item -ItemType Directory -Force -Path "Subtitled_Movies"\n\n`;
+      subtitledRecords.forEach(r => {
+        const safePath = r.filePath.replace(/"/g, '`"');
+        script += `Copy-Item -Path "${safePath}" -Destination "Subtitled_Movies\\" -ErrorAction SilentlyContinue\n`;
+      });
 
-    navigator.clipboard.writeText(missing.join('\n')).then(() => {
-      alert(`Copied ${missing.length} video filenames missing subtitles to clipboard!`);
-    }).catch(err => {
-      console.warn('Clipboard write error:', err);
+      downloadBlob(script, 'Organize_Subtitled_Movies.ps1', 'text/plain;charset=utf-8;');
     });
-  });
+  }
 
   function downloadBlob(content, filename, contentType) {
     const blob = new Blob([content], { type: contentType });
