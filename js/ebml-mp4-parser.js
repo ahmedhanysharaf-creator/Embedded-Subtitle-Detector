@@ -64,12 +64,26 @@ const LANG_MAP = {
 class FastHeaderParser {
   
   static formatLanguage(code) {
-    if (!code) return 'Undefined';
+    if (!code || code === 'und') return 'Undefined';
     const clean = String(code).trim().toLowerCase().replace(/[^a-z]/g, '');
     if (LANG_MAP[clean]) return LANG_MAP[clean];
     if (LANG_MAP[clean.slice(0, 3)]) return LANG_MAP[clean.slice(0, 3)];
     if (LANG_MAP[clean.slice(0, 2)]) return LANG_MAP[clean.slice(0, 2)];
     return code.toUpperCase();
+  }
+
+  static decodeMp4Lang(langVal) {
+    if (!langVal || langVal === 0 || langVal === 0x55C3) return 'und';
+    const c1 = (langVal >> 10) & 0x1F;
+    const c2 = (langVal >> 5) & 0x1F;
+    const c3 = langVal & 0x1F;
+    if (c1 === 0 || c2 === 0 || c3 === 0) return 'und';
+    const char1 = String.fromCharCode(c1 + 0x60);
+    const char2 = String.fromCharCode(c2 + 0x60);
+    const char3 = String.fromCharCode(c3 + 0x60);
+    const lang = `${char1}${char2}${char3}`;
+    if (!/^[a-z]{3}$/.test(lang)) return 'und';
+    return lang;
   }
 
   static readFileSlice(file, start = 0, length = 512 * 1024) {
@@ -129,7 +143,7 @@ class FastHeaderParser {
         subtitles: [],
         videoTracksCount: 1,
         audioTracksCount: 1,
-        parsedBy: 'Fast Native MP4 Engine (moov not found)'
+        parsedBy: 'Fast Native MP4 Engine'
       };
     }
 
@@ -146,92 +160,63 @@ class FastHeaderParser {
       return { size: size >>> 0, type };
     };
 
-    // Scan for 'trak' boxes inside 'moov'
-    let cursor = 8; // skip moov box header
+    let cursor = 8;
     while (cursor < len - 8) {
       const box = readBoxHeader(cursor);
       if (!box || box.size < 8 || cursor + box.size > len) break;
 
       if (box.type === 'trak') {
-        let trakCursor = cursor + 8;
-        const trakEnd = cursor + box.size;
+        const trakBuf = buf.subarray(cursor, cursor + box.size);
         let handlerType = '';
         let langCode = 'und';
         let sampleFormat = '';
+        let isChapterTrack = false;
 
-        while (trakCursor < trakEnd - 8) {
-          const subBox = readBoxHeader(trakCursor);
-          if (!subBox || subBox.size < 8 || trakCursor + subBox.size > trakEnd) break;
+        for (let j = 0; j < trakBuf.length - 8; j++) {
+          const subType = String.fromCharCode(trakBuf[j+4], trakBuf[j+5], trakBuf[j+6], trakBuf[j+7]);
 
-          if (subBox.type === 'mdia') {
-            let mdiaCursor = trakCursor + 8;
-            const mdiaEnd = trakCursor + subBox.size;
-            
-            while (mdiaCursor < mdiaEnd - 8) {
-              const mBox = readBoxHeader(mdiaCursor);
-              if (!mBox || mBox.size < 8 || mdiaCursor + mBox.size > mdiaEnd) break;
+          if (subType === 'hdlr' && j + 20 <= trakBuf.length) {
+            const cType = String.fromCharCode(trakBuf[j+12], trakBuf[j+13], trakBuf[j+14], trakBuf[j+15]);
+            const hType = String.fromCharCode(trakBuf[j+16], trakBuf[j+17], trakBuf[j+18], trakBuf[j+19]);
+            handlerType = (cType && cType.trim() && /[a-z]/i.test(cType)) ? cType : hType;
+          }
 
-              // hdlr (Handler Reference)
-              if (mBox.type === 'hdlr') {
-                const hdlrPos = mdiaCursor + 8;
-                if (hdlrPos + 12 <= len) {
-                  handlerType = String.fromCharCode(buf[hdlrPos+8], buf[hdlrPos+9], buf[hdlrPos+10], buf[hdlrPos+11]);
-                }
-              }
-              // mdhd (Media Header) for language
-              else if (mBox.type === 'mdhd') {
-                const mdhdPos = mdiaCursor + 8;
-                const version = buf[mdhdPos];
-                const langOffset = version === 1 ? mdhdPos + 20 : mdhdPos + 12;
-                if (langOffset + 2 <= len) {
-                  const langVal = (buf[langOffset] << 8) | buf[langOffset+1];
-                  const char1 = String.fromCharCode(((langVal >> 10) & 0x1F) + 0x60);
-                  const char2 = String.fromCharCode(((langVal >> 5) & 0x1F) + 0x60);
-                  const char3 = String.fromCharCode((langVal & 0x1F) + 0x60);
-                  langCode = `${char1}${char2}${char3}`;
-                }
-              }
-              // minf -> stbl -> stsd for sample format
-              else if (mBox.type === 'minf') {
-                let minfCursor = mdiaCursor + 8;
-                const minfEnd = mdiaCursor + mBox.size;
-                while (minfCursor < minfEnd - 8) {
-                  const minfBox = readBoxHeader(minfCursor);
-                  if (!minfBox || minfBox.size < 8 || minfCursor + minfBox.size > minfEnd) break;
-                  if (minfBox.type === 'stbl') {
-                    let stblCursor = minfCursor + 8;
-                    const stblEnd = minfCursor + minfBox.size;
-                    while (stblCursor < stblEnd - 8) {
-                      const stblBox = readBoxHeader(stblCursor);
-                      if (!stblBox || stblBox.size < 8) break;
-                      if (stblBox.type === 'stsd' && stblCursor + 16 <= len) {
-                        sampleFormat = String.fromCharCode(buf[stblCursor+16], buf[stblCursor+17], buf[stblCursor+18], buf[stblCursor+19]);
-                      }
-                      stblCursor += stblBox.size;
-                    }
-                  }
-                  minfCursor += minfBox.size;
-                }
-              }
-
-              mdiaCursor += mBox.size;
+          if (subType === 'mdhd' && j + 24 <= trakBuf.length) {
+            const version = trakBuf[j+8];
+            const langOffset = version === 1 ? j + 28 : j + 20;
+            if (langOffset + 2 <= trakBuf.length) {
+              const langVal = (trakBuf[langOffset] << 8) | trakBuf[langOffset+1];
+              langCode = this.decodeMp4Lang(langVal);
             }
           }
-          trakCursor += subBox.size;
+
+          if (subType === 'stsd' && j + 20 <= trakBuf.length) {
+            const rawFmt = String.fromCharCode(trakBuf[j+16], trakBuf[j+17], trakBuf[j+18], trakBuf[j+19]);
+            if (/^[a-zA-Z0-9_-]{3,4}$/.test(rawFmt)) {
+              sampleFormat = rawFmt;
+            }
+          }
+
+          if (subType === 'chap' || subType === 'chpl') {
+            isChapterTrack = true;
+          }
         }
 
-        const isSubtitleHandler = ['subt', 'text', 'sbtl', 'clcp', 'tx3g', 'c608', 'c708', 'wvtt', 'subp', 'p608'].includes(handlerType.toLowerCase());
-        const isSubtitleFormat = ['tx3g', 'wvtt', 'stpp', 'mp4s', 'c608', 'c708', 'subp', 'sbtl', 'text'].includes(sampleFormat.toLowerCase());
+        const hLower = handlerType.toLowerCase();
+        const sLower = sampleFormat.toLowerCase();
 
-        if (handlerType === 'vide') videoCount++;
-        else if (handlerType === 'soun') audioCount++;
-        else if (isSubtitleHandler || isSubtitleFormat) {
+        if (hLower === 'vide') videoCount++;
+        else if (hLower === 'soun') audioCount++;
+
+        const isSubHandler = ['subt', 'sbtl', 'tx3g', 'clcp', 'wvtt', 'subp', 'p608'].includes(hLower);
+        const isSubFormat = ['tx3g', 'wvtt', 'stpp', 'mp4s', 'c608', 'c708', 'subp', 'sbtl'].includes(sLower);
+
+        if ((isSubHandler || isSubFormat) && !isChapterTrack) {
           let formatDisplay = 'MOV_TEXT (tx3g)';
-          const fmtLower = (sampleFormat || handlerType).toLowerCase();
-          if (fmtLower.includes('wvtt')) formatDisplay = 'WebVTT';
-          else if (fmtLower.includes('stpp') || fmtLower.includes('xml')) formatDisplay = 'TTML / XML';
-          else if (fmtLower.includes('c608') || fmtLower.includes('c708') || fmtLower.includes('clcp')) formatDisplay = 'CEA-608/708 Closed Captions';
-          else if (fmtLower.includes('subp')) formatDisplay = 'VobSub';
+          if (sLower.includes('wvtt') || hLower.includes('wvtt')) formatDisplay = 'WebVTT';
+          else if (sLower.includes('stpp') || sLower.includes('xml')) formatDisplay = 'TTML / XML';
+          else if (sLower.includes('c608') || sLower.includes('c708') || hLower.includes('clcp')) formatDisplay = 'CEA-608/708 Closed Captions';
+          else if (sLower.includes('subp') || hLower.includes('subp')) formatDisplay = 'VobSub';
 
           subtitles.push({
             trackId: subtitles.length + 1,
@@ -261,10 +246,9 @@ class FastHeaderParser {
    * Fast locator for MP4 'moov' atom across header, tail, and top-level box scan
    */
   static async findMP4MoovBuffer(file) {
-    // 1. Read head chunk (512 KB)
     const headView = await this.readFileSlice(file, 0, 512 * 1024);
     const headBuf = new Uint8Array(headView.buffer);
-    let moovIdx = this.indexOfBytes(headBuf, [109, 111, 111, 118]); // 'moov'
+    let moovIdx = this.indexOfBytes(headBuf, [109, 111, 111, 118]);
 
     if (moovIdx !== -1 && moovIdx >= 4) {
       const boxStart = moovIdx - 4;
@@ -277,7 +261,6 @@ class FastHeaderParser {
       }
     }
 
-    // 2. Read tail chunk (2 MB) - MP4 movies frequently place 'moov' after 'mdat' at the end of the file!
     const tailLength = Math.min(file.size, 2 * 1024 * 1024);
     const tailStart = file.size - tailLength;
     const tailView = await this.readFileSlice(file, tailStart, tailLength);
@@ -296,7 +279,6 @@ class FastHeaderParser {
       }
     }
 
-    // 3. Step through top-level boxes if moov is somewhere in the middle
     let pos = 0;
     let attempts = 0;
     while (pos < file.size - 8 && attempts < 30) {
@@ -329,10 +311,9 @@ class FastHeaderParser {
   // MKV / EBML PARSER
   // ==========================================
   static async parseMKV(file) {
-    const dataView = await this.readFileSlice(file, 0, 1024 * 1024); // 1 MB
+    const dataView = await this.readFileSlice(file, 0, 1024 * 1024);
     const buf = new Uint8Array(dataView.buffer);
     
-    // Check EBML Header Signature 0x1A 0x45 0xDF 0xA3
     if (buf[0] !== 0x1A || buf[1] !== 0x45 || buf[2] !== 0xDF || buf[3] !== 0xA3) {
       return null;
     }
@@ -375,7 +356,6 @@ class FastHeaderParser {
       return { id: id >>> 0, length };
     };
 
-    // Fast search for Tracks Element ID: 0x1654AE6B
     let tracksPos = -1;
     for (let i = 0; i < buf.length - 4; i++) {
       if (buf[i] === 0x16 && buf[i+1] === 0x54 && buf[i+2] === 0xAE && buf[i+3] === 0x6B) {
@@ -400,7 +380,7 @@ class FastHeaderParser {
           const entryStart = cursor + el.length + sz.length;
           const entryEnd = Math.min(entryStart + sz.value, tracksEnd);
 
-          if (el.id === 0xAE) { // TrackEntry
+          if (el.id === 0xAE) {
             let trackType = 0;
             let codecId = 'Unknown';
             let language = 'und';
