@@ -143,14 +143,24 @@ class FastHeaderParser {
         let langCode = 'und';
         let sampleFormat = '';
         let isChapterTrack = false;
+        let isSubtitleTrack = false;
 
         for (let j = 0; j < trakBuf.length - 8; j++) {
           const subType = String.fromCharCode(trakBuf[j+4], trakBuf[j+5], trakBuf[j+6], trakBuf[j+7]);
 
           if (subType === 'hdlr' && j + 20 <= trakBuf.length) {
-            const cType = String.fromCharCode(trakBuf[j+12], trakBuf[j+13], trakBuf[j+14], trakBuf[j+15]);
-            const hType = String.fromCharCode(trakBuf[j+16], trakBuf[j+17], trakBuf[j+18], trakBuf[j+19]);
-            handlerType = (cType && cType.trim() && /[a-z]/i.test(cType)) ? cType : hType;
+            const str1 = String.fromCharCode(trakBuf[j+12], trakBuf[j+13], trakBuf[j+14], trakBuf[j+15]).toLowerCase();
+            const str2 = String.fromCharCode(trakBuf[j+16], trakBuf[j+17], trakBuf[j+18], trakBuf[j+19]).toLowerCase();
+            
+            if (str1 === 'vide' || str2 === 'vide') handlerType = 'vide';
+            else if (str1 === 'soun' || str2 === 'soun') handlerType = 'soun';
+            else {
+              const subCandidate = [str1, str2].find(s => ['subt', 'sbtl', 'text', 'tx3g', 'clcp', 'wvtt', 'subp', 'p608'].includes(s));
+              if (subCandidate) {
+                handlerType = subCandidate;
+                isSubtitleTrack = true;
+              }
+            }
           }
 
           if (subType === 'mdhd' && j + 24 <= trakBuf.length) {
@@ -180,10 +190,10 @@ class FastHeaderParser {
         if (hLower === 'vide') videoCount++;
         else if (hLower === 'soun') audioCount++;
 
-        const isSubHandler = ['subt', 'sbtl', 'tx3g', 'clcp', 'wvtt', 'subp', 'p608'].includes(hLower);
+        const isSubHandler = ['subt', 'sbtl', 'text', 'tx3g', 'clcp', 'wvtt', 'subp', 'p608'].includes(hLower);
         const isSubFormat = ['tx3g', 'wvtt', 'stpp', 'mp4s', 'c608', 'c708', 'subp', 'sbtl'].includes(sLower);
 
-        if ((isSubHandler || isSubFormat) && !isChapterTrack) {
+        if ((isSubtitleTrack || isSubHandler || isSubFormat) && !isChapterTrack) {
           let formatDisplay = 'MOV_TEXT (tx3g)';
           if (sLower.includes('wvtt') || hLower.includes('wvtt')) formatDisplay = 'WebVTT';
           else if (sLower.includes('stpp') || sLower.includes('xml')) formatDisplay = 'TTML / XML';
@@ -280,13 +290,14 @@ class FastHeaderParser {
   }
 
   // ==========================================
-  // MKV / EBML PARSER (ACCURATE TRACKS LOCATOR)
+  // MKV / EBML PARSER (ACCURATE TRACKS LOCATOR & FALLBACK SCANNER)
   // ==========================================
   static async parseMKV(file) {
-    const dataView = await this.readFileSlice(file, 0, 5 * 1024 * 1024); // 5 MB header slice
+    const sliceLen = Math.min(file.size, 12 * 1024 * 1024); // 12 MB header slice
+    const dataView = await this.readFileSlice(file, 0, sliceLen);
     const buf = new Uint8Array(dataView.buffer);
     
-    if (buf[0] !== 0x1A || buf[1] !== 0x45 || buf[2] !== 0xDF || buf[3] !== 0xA3) {
+    if (buf.length < 4 || buf[0] !== 0x1A || buf[1] !== 0x45 || buf[2] !== 0xDF || buf[3] !== 0xA3) {
       return null;
     }
 
@@ -328,21 +339,69 @@ class FastHeaderParser {
       return { id: id >>> 0, length };
     };
 
-    // Locate true Tracks element (0x1654AE6B) whose first child is TrackEntry (0xAE)
+    // Locate true Tracks element (0x1654AE6B)
     let tracksPos = -1;
     for (let i = 0; i < buf.length - 10; i++) {
       if (buf[i] === 0x16 && buf[i+1] === 0x54 && buf[i+2] === 0xAE && buf[i+3] === 0x6B) {
-        const elId = readElementId(i);
-        const elSz = readVint(i + elId.length);
-        if (elSz) {
-          const childPos = i + elId.length + elSz.length;
-          if (childPos < buf.length && buf[childPos] === 0xAE) {
-            tracksPos = i;
-            break;
-          }
-        }
+        tracksPos = i;
+        break;
       }
     }
+
+    const parseTrackEntryBuffer = (entryStart, entryEnd) => {
+      let trackType = 0;
+      let codecId = 'Unknown';
+      let language = 'und';
+      let trackName = '';
+      let isDefault = false;
+      let isForced = false;
+
+      let tc = entryStart;
+      while (tc < entryEnd - 1) {
+        const subEl = readElementId(tc);
+        if (!subEl) break;
+        const subSz = readVint(tc + subEl.length);
+        if (!subSz) break;
+
+        const valPos = tc + subEl.length + subSz.length;
+        const valLen = subSz.value;
+        if (valPos + valLen > entryEnd) break;
+
+        if (subEl.id === 0x83 && valLen >= 1) trackType = buf[valPos];
+        else if (subEl.id === 0x86) codecId = new TextDecoder('ascii').decode(buf.subarray(valPos, valPos + valLen));
+        else if (subEl.id === 0x22B59C || subEl.id === 0x22B59D) language = new TextDecoder('ascii').decode(buf.subarray(valPos, valPos + valLen)).replace(/\0/g, '');
+        else if (subEl.id === 0x536E) trackName = new TextDecoder('utf-8').decode(buf.subarray(valPos, valPos + valLen)).replace(/\0/g, '');
+        else if (subEl.id === 0x55EE && valLen >= 1) isDefault = buf[valPos] === 1;
+        else if (subEl.id === 0x55E8 && valLen >= 1) isForced = buf[valPos] === 1;
+
+        tc = valPos + valLen;
+      }
+
+      if (trackType === 1) videoCount++;
+      if (trackType === 2) audioCount++;
+
+      const upperCodec = codecId.toUpperCase();
+      const isSub = (trackType === 0x11 || trackType === 17 || trackType === 0x20 || upperCodec.startsWith('S_') || upperCodec.includes('SUB') || upperCodec.includes('ASS') || upperCodec.includes('PGS') || upperCodec.includes('UTF8'));
+
+      if (isSub) {
+        let format = 'SRT';
+        if (upperCodec.includes('ASS') || upperCodec.includes('SSA')) format = 'ASS / SSA';
+        else if (upperCodec.includes('PGS') || upperCodec.includes('HDMV')) format = 'PGS (HDMV)';
+        else if (upperCodec.includes('VOBSUB')) format = 'VobSub';
+        else if (upperCodec.includes('UTF8') || upperCodec.includes('SUBRIP')) format = 'SubRip (SRT)';
+        else format = codecId.replace(/^S_/, '');
+
+        subtitles.push({
+          trackId: subtitles.length + 1,
+          format: format,
+          codec: codecId,
+          language: this.formatLanguage(language),
+          title: trackName || `Track #${subtitles.length + 1}`,
+          isDefault: isDefault,
+          isForced: isForced
+        });
+      }
+    };
 
     if (tracksPos !== -1) {
       const elementIdInfo = readElementId(tracksPos);
@@ -361,56 +420,24 @@ class FastHeaderParser {
           const entryEnd = Math.min(entryStart + sz.value, tracksEnd);
 
           if (el.id === 0xAE) { // TrackEntry
-            let trackType = 0;
-            let codecId = 'Unknown';
-            let language = 'und';
-            let trackName = '';
-            let isDefault = false;
-            let isForced = false;
-
-            let tc = entryStart;
-            while (tc < entryEnd - 1) {
-              const subEl = readElementId(tc);
-              if (!subEl) break;
-              const subSz = readVint(tc + subEl.length);
-              if (!subSz) break;
-
-              const valPos = tc + subEl.length + subSz.length;
-              const valLen = subSz.value;
-              if (valPos + valLen > entryEnd) break;
-
-              if (subEl.id === 0x83 && valLen >= 1) trackType = buf[valPos];
-              else if (subEl.id === 0x86) codecId = new TextDecoder('ascii').decode(buf.subarray(valPos, valPos + valLen));
-              else if (subEl.id === 0x22B59C || subEl.id === 0x22B59D) language = new TextDecoder('ascii').decode(buf.subarray(valPos, valPos + valLen)).replace(/\0/g, '');
-              else if (subEl.id === 0x536E) trackName = new TextDecoder('utf-8').decode(buf.subarray(valPos, valPos + valLen)).replace(/\0/g, '');
-              else if (subEl.id === 0x55EE && valLen >= 1) isDefault = buf[valPos] === 1;
-              else if (subEl.id === 0x55E8 && valLen >= 1) isForced = buf[valPos] === 1;
-
-              tc = valPos + valLen;
-            }
-
-            if (trackType === 1) videoCount++;
-            if (trackType === 2) audioCount++;
-            if (trackType === 0x11 || trackType === 17 || trackType === 0x20) {
-              let format = 'SRT';
-              if (codecId.includes('ASS') || codecId.includes('SSA')) format = 'ASS / SSA';
-              else if (codecId.includes('PGS') || codecId.includes('HDMV')) format = 'PGS (HDMV)';
-              else if (codecId.includes('VOBSUB')) format = 'VobSub';
-              else if (codecId.includes('UTF8')) format = 'SubRip (SRT)';
-              else format = codecId.replace('S_', '');
-
-              subtitles.push({
-                trackId: subtitles.length + 1,
-                format: format,
-                codec: codecId,
-                language: this.formatLanguage(language),
-                title: trackName || `Track #${subtitles.length + 1}`,
-                isDefault: isDefault,
-                isForced: isForced
-              });
-            }
+            parseTrackEntryBuffer(entryStart, entryEnd);
           }
           cursor = entryEnd;
+        }
+      }
+    }
+
+    // Fallback: search for any TrackEntry (0xAE) tags directly in the header if subtitles array is empty
+    if (subtitles.length === 0) {
+      for (let i = 0; i < buf.length - 20; i++) {
+        if (buf[i] === 0xAE) {
+          const elSz = readVint(i + 1);
+          if (elSz && elSz.value > 10 && elSz.value < 2048) {
+            const entryStart = i + 1 + elSz.length;
+            const entryEnd = Math.min(entryStart + elSz.value, buf.length);
+            parseTrackEntryBuffer(entryStart, entryEnd);
+            i = entryEnd;
+          }
         }
       }
     }

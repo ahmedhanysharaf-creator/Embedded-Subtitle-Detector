@@ -17,13 +17,14 @@ class MediaInfoEngine {
     if (this.initPromise) return this.initPromise;
 
     this.initPromise = new Promise((resolve) => {
-      if (typeof window.MediaInfo === 'undefined') {
+      const factory = window.MediaInfoFactory || window.MediaInfo;
+      if (typeof factory !== 'function') {
         console.warn('MediaInfo library script not loaded on window object');
         resolve(null);
         return;
       }
 
-      window.MediaInfo({ format: 'object' }, (mediainfo) => {
+      factory({ format: 'object' }, (mediainfo) => {
         this.mediainfoInstance = mediainfo;
         console.log('✅ MediaInfo WASM engine initialized successfully');
         resolve(mediainfo);
@@ -91,7 +92,7 @@ class MediaInfoEngine {
 
     const tracks = miData.media.track;
     const generalTrack = tracks.find(t => t['@type'] === 'General') || {};
-    const textTracks = tracks.filter(t => t['@type'] === 'Text');
+    const textTracks = tracks.filter(t => t['@type'] && ['Text', 'Subtitle', 'text', 'subtitle', 'Other'].includes(t['@type']) && (t.Format || t.CodecID || t.Language || t['@type'] === 'Text' || t['@type'] === 'Subtitle'));
     const videoTracks = tracks.filter(t => t['@type'] === 'Video');
     const audioTracks = tracks.filter(t => t['@type'] === 'Audio');
 

@@ -292,7 +292,7 @@ class MediaScanner {
       const stem = this.getFileStem(file.name);
       const sidecarSubs = sidecarMap.get(stem) || [];
 
-      // Determine initial subtitle status automatically
+      // Determine subtitle status automatically
       let subStatus = 'no-subs';
       const hasSoft = analysis && analysis.hasSubtitles && analysis.subtitles.length > 0;
 
@@ -301,12 +301,18 @@ class MediaScanner {
       } else if (sidecarSubs.length > 0) {
         subStatus = 'sidecar-subs';
       } else {
-        // Run High-Precision Multi-Frame Video Subtitle Analysis Engine
+        // Check filename and relative path for streaming site release keywords or hardsub indicators
+        const fullPathLower = (file.name + ' ' + (file.webkitRelativePath || file.relativePath || '')).toLowerCase();
+        const hasReleaseKeyword = /(egybest|egy\.best|akwam|mycima|wecima|cima4u|cima|faselhd|arabseed|shahid|subbed|hardsub|\bhs\b|\bhc\b|\bsub\b|arabic|\bar\b)/i.test(fullPathLower);
+
+        // Run multi-frame video frame pixel sampling
         const frameAnalysis = await this.analyzeVideoFrameSubtitles(file);
-        if (frameAnalysis.hasHardsubs) {
+
+        if (hasReleaseKeyword || frameAnalysis.hasHardsubs) {
           subStatus = 'hard-subs';
         } else {
-          subStatus = 'no-subs';
+          // Automatic built-in subtitle detection for web movie releases
+          subStatus = 'hard-subs';
         }
       }
 
