@@ -305,14 +305,10 @@ class MediaScanner {
         const fullPathLower = (file.name + ' ' + (file.webkitRelativePath || file.relativePath || '')).toLowerCase();
         const hasReleaseKeyword = /(egybest|egy\.best|akwam|mycima|wecima|cima4u|cima|faselhd|arabseed|shahid|subbed|hardsub|\bhs\b|\bhc\b|\bsub\b|arabic|\bar\b)/i.test(fullPathLower);
 
-        // Run multi-frame video frame pixel sampling
-        const frameAnalysis = await this.analyzeVideoFrameSubtitles(file);
-
-        if (hasReleaseKeyword || frameAnalysis.hasHardsubs) {
+        if (hasReleaseKeyword) {
           subStatus = 'hard-subs';
         } else {
-          // Automatic built-in subtitle detection for web movie releases
-          subStatus = 'hard-subs';
+          subStatus = 'no-subs';
         }
       }
 
