@@ -707,6 +707,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       script += `foreach ($f in $files) {\n`;
       script += `    $cleanPath = $f.Replace('/', '\\')\n`;
+      script += `    $leaf = Split-Path -Leaf $cleanPath\n`;
       script += `    if (Test-Path -Path $cleanPath) {\n`;
       script += `        ${cmdName} -Path $cleanPath -Destination $dest -Force\n`;
       script += `        Write-Host "${actionTitle}D: $cleanPath" -ForegroundColor Green\n`;
@@ -714,7 +715,13 @@ document.addEventListener('DOMContentLoaded', () => {
       script += `        ${cmdName} -Path ".\\$cleanPath" -Destination $dest -Force\n`;
       script += `        Write-Host "${actionTitle}D: .\\$cleanPath" -ForegroundColor Green\n`;
       script += `    } else {\n`;
-      script += `        Write-Host "File not found: $cleanPath" -ForegroundColor Yellow\n`;
+      script += `        $found = Get-ChildItem -Path $PSScriptRoot, "$env:USERPROFILE\\Downloads", "$env:USERPROFILE" -Filter $leaf -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1\n`;
+      script += `        if ($found) {\n`;
+      script += `            ${cmdName} -Path $found.FullName -Destination $dest -Force\n`;
+      script += `            Write-Host "${actionTitle}D: $($found.FullName)" -ForegroundColor Green\n`;
+      script += `        } else {\n`;
+      script += `            Write-Host "File not found: $leaf" -ForegroundColor Yellow\n`;
+      script += `        }\n`;
       script += `    }\n`;
       script += `}\n\n`;
       script += `Write-Host "Organizing Complete!" -ForegroundColor Cyan\n`;
