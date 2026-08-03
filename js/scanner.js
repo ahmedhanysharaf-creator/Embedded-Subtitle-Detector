@@ -313,8 +313,8 @@ class MediaScanner {
       // Attempt visual video frame analysis directly in browser
       const visualRes = await this.analyzeVideoFrameSubtitles(file);
 
-      // Determine 2-Category subtitle status automatically
-      const subStatus = (hasFullSoft || sidecarSubs.length > 0 || visualRes.hasHardsubs) ? 'has-subs' : 'no-subs';
+      // Determine 2-Category subtitle status strictly based on visual hardcoded/burned-in frame analysis (subtitles in video image framing)
+      const subStatus = visualRes.hasHardsubs ? 'has-subs' : 'no-subs';
 
       const mediaRecord = {
         id: `media_${Date.now()}_${i}`,
