@@ -265,7 +265,10 @@ def generate_html_report(results, report_dir):
 def main():
     parser = argparse.ArgumentParser(description="SubDetect PRO — Hardcoded Subtitle Scanner & Target Folder Automator")
     parser.add_argument('--folder', type=str, default='.', help="Target movie folder path to scan")
-    parser.add_argument('--organize', action='store_true', help="Automatically move movies with built-in subtitles to Subtitled_Movies folder")
+    parser.add_argument('--category', type=str, choices=['subtitled', 'no-subtitles'], default=None, help="Category to organize ('subtitled' or 'no-subtitles')")
+    parser.add_argument('--dest', type=str, default=None, help="Custom destination folder path or name")
+    parser.add_argument('--copy', action='store_true', help="Copy files instead of moving")
+    parser.add_argument('--organize', action='store_true', help="Automatically run target folder organization after scanning")
     args = parser.parse_args()
 
     check_dependencies()
@@ -280,7 +283,7 @@ def main():
     print(f"=======================================================")
     print(f"📂 Scanning Directory: {target_dir}\n")
 
-    video_files = [p for p in target_dir.rglob('*') if p.suffix.lower() in VIDEO_EXTENSIONS and not 'Subtitled_Movies' in str(p)]
+    video_files = [p for p in target_dir.rglob('*') if p.suffix.lower() in VIDEO_EXTENSIONS and not 'Subtitled_Movies' in str(p) and not 'No_Subtitle_Movies' in str(p)]
 
     if not video_files:
         print("⚠️ No video files found in target directory.")
@@ -308,29 +311,67 @@ def main():
     print(f"📊 Report Generated: {report_path}")
 
     subtitled_files = [r for r in results if r['has_subtitles']]
+    no_sub_files = [r for r in results if not r['has_subtitles']]
+
     print(f"🟢 Movies with Built-in Subtitles: {len(subtitled_files)}")
-    print(f"🔴 Movies with No Subtitles: {len(results) - len(subtitled_files)}")
+    print(f"🔴 Movies with No Subtitles: {len(no_sub_files)}")
     print(f"=======================================================\n")
 
-    # Target Folder Move Logic
+    # Interactive Target Folder Organization Prompt
     do_organize = args.organize
     if not do_organize:
-        ans = input("❓ Would you like to move all movies with built-in subtitles to 'Subtitled_Movies' folder now? (y/n): ").strip().lower()
+        ans = input("❓ Would you like to organize files into a destination folder now? (y/n): ").strip().lower()
         if ans == 'y':
             do_organize = True
 
-    if do_organize and subtitled_files:
-        dest_dir = target_dir / "Subtitled_Movies"
-        dest_dir.mkdir(exist_ok=True)
-        print(f"\n🚚 Organizing {len(subtitled_files)} movie(s) into: {dest_dir}")
-        for r in subtitled_files:
+    if do_organize:
+        cat_choice = args.category
+        if not cat_choice:
+            print("\nSelect Category to Organize:")
+            print(f"  [1] Movies with Built-in Subtitles ({len(subtitled_files)} files)")
+            print(f"  [2] Movies with No Subtitles ({len(no_sub_files)} files)")
+            sel = input("Choice (1/2, default=1): ").strip()
+            cat_choice = 'no-subtitles' if sel == '2' else 'subtitled'
+
+        target_files = subtitled_files if cat_choice == 'subtitled' else no_sub_files
+        default_folder_name = "Subtitled_Movies" if cat_choice == 'subtitled' else "No_Subtitle_Movies"
+
+        if not target_files:
+            print(f"\n⚠️ No files found in selected category: '{cat_choice}'. Skipping organization.")
+            return
+
+        dest_val = args.dest
+        if not dest_val:
+            dest_val = input(f"\nEnter Destination Folder Path/Name [default: {default_folder_name}]: ").strip()
+            if not dest_val:
+                dest_val = default_folder_name
+
+        dest_dir = Path(dest_val)
+        if not dest_dir.is_absolute():
+            dest_dir = target_dir / dest_val
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        is_copy = args.copy
+        if not args.copy and not args.organize:
+            act_sel = input("\nSelect Action: [1] Move Files (default)  [2] Copy Files: ").strip()
+            if act_sel == '2':
+                is_copy = True
+
+        action_name = "Copying" if is_copy else "Moving"
+        print(f"\n🚚 {action_name} {len(target_files)} movie(s) into: {dest_dir}")
+
+        for r in target_files:
             src_p = Path(r['path'])
             dest_p = dest_dir / src_p.name
             try:
-                shutil.move(str(src_p), str(dest_p))
-                print(f"  └─ Moved: {src_p.name}")
+                if is_copy:
+                    shutil.copy2(str(src_p), str(dest_p))
+                    print(f"  └─ Copied: {src_p.name}")
+                else:
+                    shutil.move(str(src_p), str(dest_p))
+                    print(f"  └─ Moved: {src_p.name}")
             except Exception as e:
-                print(f"  └─ Error moving {src_p.name}: {e}")
+                print(f"  └─ Error processing {src_p.name}: {e}")
 
         print("\n🎉 Target Folder Organization Complete!")
 

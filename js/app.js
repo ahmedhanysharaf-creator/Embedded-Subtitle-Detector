@@ -600,25 +600,117 @@ document.addEventListener('DOMContentLoaded', () => {
     downloadBlob(JSON.stringify(data, null, 2), 'SubDetect_Report.json', 'application/json');
   });
 
-  const exportMoveScriptBtn = document.getElementById('exportMoveScriptBtn');
-  if (exportMoveScriptBtn) {
-    exportMoveScriptBtn.addEventListener('click', (e) => {
+  // --- CUSTOM TARGET FOLDER ORGANIZER MODAL ---
+  const openOrganizeModalBtn = document.getElementById('openOrganizeModalBtn');
+  const organizeModalBackdrop = document.getElementById('organizeModalBackdrop');
+  const closeOrganizeModalBtn = document.getElementById('closeOrganizeModalBtn');
+  const cancelOrganizeBtn = document.getElementById('cancelOrganizeBtn');
+  const downloadOrganizeScriptBtn = document.getElementById('downloadOrganizeScriptBtn');
+
+  const radioCardHasSubs = document.getElementById('radioCardHasSubs');
+  const radioCardNoSubs = document.getElementById('radioCardNoSubs');
+  const destFolderPath = document.getElementById('destFolderPath');
+  const modalCountHasSubs = document.getElementById('modalCountHasSubs');
+  const modalCountNoSubs = document.getElementById('modalCountNoSubs');
+
+  function openOrganizeModal() {
+    const subtitled = scannedRecords.filter(r => r.subStatus === 'has-subs');
+    const nosubs = scannedRecords.filter(r => r.subStatus === 'no-subs');
+
+    if (modalCountHasSubs) modalCountHasSubs.textContent = subtitled.length;
+    if (modalCountNoSubs) modalCountNoSubs.textContent = nosubs.length;
+
+    organizeModalBackdrop.classList.remove('hidden');
+  }
+
+  function closeOrganizeModal() {
+    organizeModalBackdrop.classList.add('hidden');
+  }
+
+  if (openOrganizeModalBtn) {
+    openOrganizeModalBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      const subtitledRecords = scannedRecords.filter(r => r.subStatus === 'has-subs');
-      if (subtitledRecords.length === 0) {
-        alert('No movies with built-in subtitles found to organize.');
+      if (scannedRecords.length === 0) {
+        alert('Please scan or drop a movie folder first before organizing.');
+        return;
+      }
+      openOrganizeModal();
+    });
+  }
+
+  if (closeOrganizeModalBtn) closeOrganizeModalBtn.addEventListener('click', closeOrganizeModal);
+  if (cancelOrganizeBtn) cancelOrganizeBtn.addEventListener('click', closeOrganizeModal);
+
+  if (radioCardHasSubs && radioCardNoSubs) {
+    radioCardHasSubs.addEventListener('click', () => {
+      radioCardHasSubs.classList.add('active');
+      radioCardNoSubs.classList.remove('active');
+      const radio = radioCardHasSubs.querySelector('input[type="radio"]');
+      if (radio) radio.checked = true;
+      if (destFolderPath && destFolderPath.value === 'No_Subtitle_Movies') {
+        destFolderPath.value = 'Subtitled_Movies';
+      }
+    });
+
+    radioCardNoSubs.addEventListener('click', () => {
+      radioCardNoSubs.classList.add('active');
+      radioCardHasSubs.classList.remove('active');
+      const radio = radioCardNoSubs.querySelector('input[type="radio"]');
+      if (radio) radio.checked = true;
+      if (destFolderPath && destFolderPath.value === 'Subtitled_Movies') {
+        destFolderPath.value = 'No_Subtitle_Movies';
+      }
+    });
+  }
+
+  if (downloadOrganizeScriptBtn) {
+    downloadOrganizeScriptBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      
+      const selectedCategoryRadio = document.querySelector('input[name="organizeCategory"]:checked');
+      const category = selectedCategoryRadio ? selectedCategoryRadio.value : 'has-subs';
+
+      const selectedActionRadio = document.querySelector('input[name="organizeAction"]:checked');
+      const action = selectedActionRadio ? selectedActionRadio.value : 'move';
+
+      let targetFolder = (destFolderPath ? destFolderPath.value.trim() : '') || (category === 'has-subs' ? 'Subtitled_Movies' : 'No_Subtitle_Movies');
+
+      const targetRecords = scannedRecords.filter(r => r.subStatus === category);
+      if (targetRecords.length === 0) {
+        const categoryName = category === 'has-subs' ? 'Movies with Built-in Subtitles' : 'Movies with No Subtitles';
+        alert(`No files found in category: "${categoryName}".`);
         return;
       }
 
-      let script = `# PowerShell Script: Move Movies with Built-in Subtitles to Target Folder\n`;
-      script += `# Target Folder: Subtitled_Movies\n\n`;
-      script += `New-Item -ItemType Directory -Force -Path "Subtitled_Movies"\n\n`;
-      subtitledRecords.forEach(r => {
+      const categoryLabel = category === 'has-subs' ? 'Movies with Built-in Subtitles' : 'Movies with No Subtitles';
+      const cmdName = action === 'move' ? 'Move-Item' : 'Copy-Item';
+
+      let script = `# PowerShell Script: Custom Target Folder Organizer\n`;
+      script += `# Category: ${categoryLabel} (${targetRecords.length} files)\n`;
+      script += `# Target Destination Folder: ${targetFolder}\n`;
+      script += `# Operation: ${action.toUpperCase()}\n\n`;
+
+      const isAbsolutePath = /^[a-zA-Z]:[\\\/]/.test(targetFolder);
+      const safeFolder = targetFolder.replace(/"/g, '`"');
+
+      if (isAbsolutePath) {
+        script += `New-Item -ItemType Directory -Force -Path "${safeFolder}"\n\n`;
+      } else {
+        script += `New-Item -ItemType Directory -Force -Path ".\\${safeFolder}"\n\n`;
+      }
+
+      targetRecords.forEach(r => {
         const safePath = r.filePath.replace(/"/g, '`"');
-        script += `Copy-Item -Path "${safePath}" -Destination "Subtitled_Movies\\" -ErrorAction SilentlyContinue\n`;
+        if (isAbsolutePath) {
+          script += `${cmdName} -Path "${safePath}" -Destination "${safeFolder}\\" -Force -ErrorAction SilentlyContinue\n`;
+        } else {
+          script += `${cmdName} -Path "${safePath}" -Destination ".\\${safeFolder}\\" -Force -ErrorAction SilentlyContinue\n`;
+        }
       });
 
-      downloadBlob(script, 'Organize_Subtitled_Movies.ps1', 'text/plain;charset=utf-8;');
+      const fileNameCategory = category === 'has-subs' ? 'Subtitled_Movies' : 'No_Subtitle_Movies';
+      downloadBlob(script, `Organize_${fileNameCategory}_${action}.ps1`, 'text/plain;charset=utf-8;');
+      closeOrganizeModal();
     });
   }
 

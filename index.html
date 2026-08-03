@@ -175,9 +175,9 @@
                 <i class="fa-solid fa-download"></i> Export / Organize <i class="fa-solid fa-chevron-down"></i>
               </button>
               <div class="dropdown-menu" id="exportMenu">
+                <button class="dropdown-item" id="openOrganizeModalBtn"><i class="fa-solid fa-folder-gear text-success"></i> Custom Target Folder Organizer...</button>
                 <button class="dropdown-item" id="exportCsvBtn"><i class="fa-solid fa-file-csv text-accent"></i> Export Metadata (CSV)</button>
                 <button class="dropdown-item" id="exportJsonBtn"><i class="fa-solid fa-file-code text-warning"></i> Export Metadata (JSON)</button>
-                <button class="dropdown-item" id="exportMoveScriptBtn"><i class="fa-solid fa-folder-arrow-right text-success"></i> Export Target Folder Move Script (.ps1)</button>
               </div>
             </div>
 
@@ -265,6 +265,79 @@
       </div>
     </div>
 
+    <!-- Custom Target Folder Organizer Modal -->
+    <div class="modal-backdrop hidden" id="organizeModalBackdrop">
+      <div class="modal-card" style="max-width: 580px;">
+        <div class="modal-header">
+          <div class="modal-title-area">
+            <h2><i class="fa-solid fa-folder-gear text-accent"></i> Custom Target Folder Organizer</h2>
+            <span class="modal-path-subtitle">Choose movie category, destination path, and file action</span>
+          </div>
+          <button class="modal-close-btn" id="closeOrganizeModalBtn">&times;</button>
+        </div>
+
+        <div class="modal-body" style="display: flex; flex-direction: column; gap: 1.25rem;">
+          <!-- 1. Category Selection -->
+          <div class="form-group">
+            <label class="form-label"><strong>1. Select Movie Category to Organize:</strong></label>
+            <div class="radio-card-group">
+              <label class="radio-card active" id="radioCardHasSubs">
+                <input type="radio" name="organizeCategory" value="has-subs" checked style="display:none;">
+                <div class="radio-card-content">
+                  <i class="fa-solid fa-circle-check text-success" style="font-size: 1.5rem;"></i>
+                  <div>
+                    <strong>Movies with Built-in Subtitles</strong>
+                    <p style="margin-top: 2px; font-size: 0.8rem; color: var(--text-secondary);"><span id="modalCountHasSubs" style="color: var(--success); font-weight: 700;">0</span> movies found</p>
+                  </div>
+                </div>
+              </label>
+
+              <label class="radio-card" id="radioCardNoSubs">
+                <input type="radio" name="organizeCategory" value="no-subs" style="display:none;">
+                <div class="radio-card-content">
+                  <i class="fa-solid fa-circle-xmark text-danger" style="font-size: 1.5rem;"></i>
+                  <div>
+                    <strong>Movies with No Subtitles</strong>
+                    <p style="margin-top: 2px; font-size: 0.8rem; color: var(--text-secondary);"><span id="modalCountNoSubs" style="color: var(--danger); font-weight: 700;">0</span> movies found</p>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- 2. Custom Destination Directory Path -->
+          <div class="form-group">
+            <label class="form-label" for="destFolderPath"><strong>2. Enter Destination Folder Path or Name:</strong></label>
+            <div class="input-with-icon">
+              <i class="fa-solid fa-folder-open text-accent"></i>
+              <input type="text" id="destFolderPath" class="form-input" value="Subtitled_Movies" placeholder="e.g. C:\MyMovies\Subtitled or Subtitled_Movies">
+            </div>
+            <p class="form-hint">Enter a full directory path (e.g. <code>C:\TargetFolder</code>) or a folder name to create inside the media directory.</p>
+          </div>
+
+          <!-- 3. Operation Action Mode -->
+          <div class="form-group">
+            <label class="form-label"><strong>3. Select Action Mode:</strong></label>
+            <div class="radio-inline-group">
+              <label class="inline-radio-label">
+                <input type="radio" name="organizeAction" value="move" checked>
+                <span><strong>Move Files</strong> (Relocate to target folder)</span>
+              </label>
+              <label class="inline-radio-label">
+                <input type="radio" name="organizeAction" value="copy">
+                <span><strong>Copy Files</strong> (Keep originals intact)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer" style="justify-content: space-between;">
+          <button class="btn btn-secondary" id="cancelOrganizeBtn">Cancel</button>
+          <button class="btn btn-primary" id="downloadOrganizeScriptBtn"><i class="fa-solid fa-file-code"></i> Generate & Download Script (.ps1)</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Footer -->
     <footer class="app-footer">
       <p>SubDetect &bull; High-Performance Browser Media Identifier &bull; 100% Client-Side Privacy</p>
@@ -272,9 +345,9 @@
   </div>
 
   <!-- Application Scripts -->
-  <script src="js/ebml-mp4-parser.js?v=18.0"></script>
-  <script src="js/mediainfo-parser.js?v=18.0"></script>
-  <script src="js/scanner.js?v=18.0"></script>
-  <script src="js/app.js?v=18.0"></script>
+  <script src="js/ebml-mp4-parser.js?v=19.0"></script>
+  <script src="js/mediainfo-parser.js?v=19.0"></script>
+  <script src="js/scanner.js?v=19.0"></script>
+  <script src="js/app.js?v=19.0"></script>
 </body>
 </html>
