@@ -684,32 +684,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const categoryLabel = category === 'has-subs' ? 'Movies with Built-in Subtitles' : 'Movies with No Subtitles';
       const cmdName = action === 'move' ? 'Move-Item' : 'Copy-Item';
+      const actionTitle = action === 'move' ? 'MOVE' : 'COPY';
+
+      const isAbsolutePath = /^[a-zA-Z]:[\\\/]/.test(targetFolder);
+      const safeFolder = targetFolder.replace(/"/g, '`"').replace(/\//g, '\\');
 
       let script = `# PowerShell Script: Custom Target Folder Organizer\n`;
       script += `# Category: ${categoryLabel} (${targetRecords.length} files)\n`;
-      script += `# Target Destination Folder: ${targetFolder}\n`;
-      script += `# Operation: ${action.toUpperCase()}\n\n`;
+      script += `# Target Destination Folder: ${safeFolder}\n`;
+      script += `# Operation: ${actionTitle}\n\n`;
 
-      const isAbsolutePath = /^[a-zA-Z]:[\\\/]/.test(targetFolder);
-      const safeFolder = targetFolder.replace(/"/g, '`"');
+      script += `$dest = "${safeFolder}"\n`;
+      script += `if (!(Test-Path -Path $dest)) { New-Item -ItemType Directory -Force -Path $dest | Out-Null }\n\n`;
 
-      if (isAbsolutePath) {
-        script += `New-Item -ItemType Directory -Force -Path "${safeFolder}"\n\n`;
-      } else {
-        script += `New-Item -ItemType Directory -Force -Path ".\\${safeFolder}"\n\n`;
-      }
-
-      targetRecords.forEach(r => {
-        let winPath = r.filePath.replace(/\//g, '\\').replace(/"/g, '`"');
-        if (!winPath.startsWith('.\\') && !/^[a-zA-Z]:\\/.test(winPath)) {
-          winPath = '.\\' + winPath;
-        }
-        if (isAbsolutePath) {
-          script += `${cmdName} -Path "${winPath}" -Destination "${safeFolder}\\" -Force -ErrorAction SilentlyContinue\n`;
-        } else {
-          script += `${cmdName} -Path "${winPath}" -Destination ".\\${safeFolder}\\" -Force -ErrorAction SilentlyContinue\n`;
-        }
+      script += `$files = @(\n`;
+      targetRecords.forEach((r, idx) => {
+        const comma = idx === targetRecords.length - 1 ? '' : ',';
+        const escPath = r.filePath.replace(/"/g, '`"');
+        script += `    "${escPath}"${comma}\n`;
       });
+      script += `)\n\n`;
+
+      script += `foreach ($f in $files) {\n`;
+      script += `    $cleanPath = $f.Replace('/', '\\')\n`;
+      script += `    if (Test-Path -Path $cleanPath) {\n`;
+      script += `        ${cmdName} -Path $cleanPath -Destination $dest -Force\n`;
+      script += `        Write-Host "${actionTitle}D: $cleanPath" -ForegroundColor Green\n`;
+      script += `    } elseif (Test-Path -Path ".\\$cleanPath") {\n`;
+      script += `        ${cmdName} -Path ".\\$cleanPath" -Destination $dest -Force\n`;
+      script += `        Write-Host "${actionTitle}D: .\\$cleanPath" -ForegroundColor Green\n`;
+      script += `    } else {\n`;
+      script += `        Write-Host "File not found: $cleanPath" -ForegroundColor Yellow\n`;
+      script += `    }\n`;
+      script += `}\n\n`;
+      script += `Write-Host "Organizing Complete!" -ForegroundColor Cyan\n`;
 
       const fileNameCategory = category === 'has-subs' ? 'Subtitled_Movies' : 'No_Subtitle_Movies';
       downloadBlob(script, `Organize_${fileNameCategory}_${action}.ps1`, 'text/plain;charset=utf-8;');
