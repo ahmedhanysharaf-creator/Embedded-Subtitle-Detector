@@ -700,11 +700,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       targetRecords.forEach(r => {
-        const safePath = r.filePath.replace(/"/g, '`"');
+        let winPath = r.filePath.replace(/\//g, '\\').replace(/"/g, '`"');
+        if (!winPath.startsWith('.\\') && !/^[a-zA-Z]:\\/.test(winPath)) {
+          winPath = '.\\' + winPath;
+        }
         if (isAbsolutePath) {
-          script += `${cmdName} -Path "${safePath}" -Destination "${safeFolder}\\" -Force -ErrorAction SilentlyContinue\n`;
+          script += `${cmdName} -Path "${winPath}" -Destination "${safeFolder}\\" -Force -ErrorAction SilentlyContinue\n`;
         } else {
-          script += `${cmdName} -Path "${safePath}" -Destination ".\\${safeFolder}\\" -Force -ErrorAction SilentlyContinue\n`;
+          script += `${cmdName} -Path "${winPath}" -Destination ".\\${safeFolder}\\" -Force -ErrorAction SilentlyContinue\n`;
         }
       });
 
