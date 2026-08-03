@@ -664,7 +664,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   if (downloadOrganizeScriptBtn) {
-    downloadOrganizeScriptBtn.addEventListener('click', (e) => {
+    downloadOrganizeScriptBtn.addEventListener('click', async (e) => {
       e.preventDefault();
       
       const selectedCategoryRadio = document.querySelector('input[name="organizeCategory"]:checked');
@@ -680,6 +680,36 @@ document.addEventListener('DOMContentLoaded', () => {
         const categoryName = category === 'has-subs' ? 'Movies with Built-in Subtitles' : 'Movies with No Subtitles';
         alert(`No files found in category: "${categoryName}".`);
         return;
+      }
+
+      downloadOrganizeScriptBtn.disabled = true;
+      downloadOrganizeScriptBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Processing...`;
+
+      // Direct Browser File System Access API Execution (If root directory handle exists)
+      const rootDirHandle = window.mediaScanner ? window.mediaScanner.rootDirectoryHandle : null;
+      let directMovedCount = 0;
+
+      if (rootDirHandle && typeof rootDirHandle.getDirectoryHandle === 'function') {
+        try {
+          const targetDirHandle = await rootDirHandle.getDirectoryHandle(targetFolder, { create: true });
+          for (const record of targetRecords) {
+            if (record.file && record.file.fileHandle) {
+              const srcHandle = record.file.fileHandle;
+              const newFileHandle = await targetDirHandle.getFileHandle(record.fileName, { create: true });
+              const writable = await newFileHandle.createWritable();
+              await writable.write(await srcHandle.getFile());
+              await writable.close();
+              if (action === 'move' && record.file.parentDirHandle) {
+                try {
+                  await record.file.parentDirHandle.removeEntry(record.fileName);
+                } catch (err) {}
+              }
+              directMovedCount++;
+            }
+          }
+        } catch (err) {
+          console.warn('Direct browser file move notice:', err);
+        }
       }
 
       const categoryLabel = category === 'has-subs' ? 'Movies with Built-in Subtitles' : 'Movies with No Subtitles';
@@ -728,6 +758,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const fileNameCategory = category === 'has-subs' ? 'Subtitled_Movies' : 'No_Subtitle_Movies';
       downloadBlob(script, `Organize_${fileNameCategory}_${action}.ps1`, 'text/plain;charset=utf-8;');
+
+      downloadOrganizeScriptBtn.disabled = false;
+      downloadOrganizeScriptBtn.innerHTML = `<i class="fa-solid fa-circle-check"></i> Done`;
+
+      if (directMovedCount > 0) {
+        alert(`Done! ${directMovedCount} files organized directly in browser.`);
+      } else {
+        alert(`Done! Organizing script downloaded. Right-click the downloaded .ps1 file and select 'Run with PowerShell' to complete moving your movies.`);
+      }
+
       closeOrganizeModal();
     });
   }

@@ -108,11 +108,12 @@ class MediaScanner {
   async pickDirectory() {
     if (typeof window.showDirectoryPicker !== 'function') return null;
     try {
-      const dirHandle = await window.showDirectoryPicker();
+      const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      this.rootDirectoryHandle = dirHandle;
       const videoFiles = [];
       const subtitleFiles = [];
       await this.traverseDirectoryHandle(dirHandle, dirHandle.name, videoFiles, subtitleFiles);
-      return { videoFiles, subtitleFiles };
+      return { videoFiles, subtitleFiles, rootDirectoryHandle: dirHandle };
     } catch (err) {
       if (err.name !== 'AbortError') console.warn('Directory picker error:', err);
       return null;
@@ -124,6 +125,8 @@ class MediaScanner {
       if (entry.kind === 'file') {
         const file = await entry.getFile();
         file.relativePath = `${currentPath}/${file.name}`;
+        file.fileHandle = entry;
+        file.parentDirHandle = dirHandle;
         if (this.isVideoFile(file)) videoFiles.push(file);
         else if (this.isSubtitleFile(file)) subtitleFiles.push(file);
       } else if (entry.kind === 'directory') {
