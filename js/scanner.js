@@ -159,6 +159,7 @@ class MediaScanner {
 
       let hasAnalyzed = false;
       let capturedDataUrl = null;
+      let maxScore = -1;
 
       const cleanUp = (result) => {
         if (hasAnalyzed) return;
@@ -169,14 +170,17 @@ class MediaScanner {
         resolve(result);
       };
 
-      // 1.8 second fail-safe timeout per file to keep scanner lightning fast
+      // Fail-safe timeout: 3.5 seconds to scan 8 spread-out video timestamps
       const timer = setTimeout(() => {
-        cleanUp({ hasHardsubs: false, confidence: 0.5, frameDataUrl: capturedDataUrl });
-      }, 1800);
+        cleanUp({ hasHardsubs: maxScore > 0.005, confidence: 0.5, frameDataUrl: capturedDataUrl });
+      }, 3500);
 
       video.onloadedmetadata = () => {
         const duration = video.duration || 1000;
-        const sampleTimes = [duration * 0.25, duration * 0.50, duration * 0.75];
+        // 8 spread-out timestamps across 12% to 82% duration
+        const samplePercentages = [0.12, 0.22, 0.32, 0.42, 0.52, 0.62, 0.72, 0.82];
+        const sampleTimes = samplePercentages.map(p => duration * p);
+
         let sampleIndex = 0;
         let detectedFrameCount = 0;
 
@@ -190,12 +194,6 @@ class MediaScanner {
 
             const ctx = canvas.getContext('2d');
             ctx.drawImage(video, 0, 0, width, height);
-
-            if (!capturedDataUrl) {
-              try {
-                capturedDataUrl = canvas.toDataURL('image/jpeg', 0.75);
-              } catch (e) {}
-            }
 
             // Subtitle zone: bottom 16% of video frame (82% to 98% height)
             const subY = Math.floor(height * 0.82);
@@ -212,15 +210,15 @@ class MediaScanner {
               const g = pixels[i + 1];
               const b = pixels[i + 2];
 
-              const isWhiteText = r > 210 && g > 210 && b > 210;
-              const isYellowText = r > 200 && g > 185 && b < 130;
+              const isWhiteText = r > 205 && g > 205 && b > 205;
+              const isYellowText = r > 195 && g > 180 && b < 135;
 
               if (isWhiteText || isYellowText) {
                 textPixelCount++;
                 const nextR = pixels[i + 4];
                 const nextG = pixels[i + 5];
                 const nextB = pixels[i + 6];
-                if (nextR < 60 && nextG < 60 && nextB < 60) {
+                if (nextR < 65 && nextG < 65 && nextB < 65) {
                   borderedTextCount++;
                 }
               }
@@ -228,12 +226,18 @@ class MediaScanner {
 
             const textRatio = textPixelCount / totalPixels;
             const borderRatio = borderedTextCount / totalPixels;
+            const currentScore = (borderRatio * 10) + textRatio;
 
-            if (textRatio > 0.003 && borderRatio > 0.0007) {
-              detectedFrameCount++;
+            // Always capture frame with highest subtitle text density
+            if (currentScore > maxScore || !capturedDataUrl) {
+              maxScore = currentScore;
               try {
-                capturedDataUrl = canvas.toDataURL('image/jpeg', 0.80);
+                capturedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
               } catch (e) {}
+            }
+
+            if (textRatio > 0.0028 && borderRatio > 0.0006) {
+              detectedFrameCount++;
             }
 
             sampleIndex++;

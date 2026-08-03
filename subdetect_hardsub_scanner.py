@@ -157,29 +157,33 @@ def save_preview_thumbnail(video_path, timestamp_sec, output_path):
 
 def scan_movie_file(video_path, report_dir):
     """
-    Inspect a single movie across 5 sample timestamps (15%, 30%, 45%, 60%, 75%).
-    Returns dictionary with detection results & thumbnail path.
+    Inspect a single movie across 11 sample timestamps (10% to 90% duration).
+    Returns dictionary with detection results & best thumbnail path.
     """
     duration = get_video_duration(video_path)
-    sample_percentages = [0.15, 0.30, 0.45, 0.60, 0.75]
+    sample_percentages = [0.10, 0.18, 0.26, 0.34, 0.42, 0.50, 0.58, 0.66, 0.74, 0.82, 0.90]
     sample_times = [duration * p for p in sample_percentages]
 
     detected_sub_frames = 0
-    best_sub_time = sample_times[1]
+    best_sub_time = sample_times[3]
+    max_score = -1.0
 
     for t_sec in sample_times:
         frame_res = extract_frame_ppm(video_path, t_sec)
         if frame_res:
             w, h, rgb_bytes = frame_res
             has_sub, t_ratio, b_ratio = analyze_ppm_subtitles(w, h, rgb_bytes)
-            if has_sub:
-                detected_sub_frames += 1
+            score = (b_ratio * 10.0) + t_ratio
+            if score > max_score:
+                max_score = score
                 best_sub_time = t_sec
 
-    # Require at least 2 out of 5 frames to contain subtitle text
-    has_built_in_subs = (detected_sub_frames >= 2)
+            if has_sub:
+                detected_sub_frames += 1
 
-    # Save thumbnail for visual HTML report
+    has_built_in_subs = (detected_sub_frames >= 1 or max_score > 0.005)
+
+    # Save best frame thumbnail for visual HTML report
     thumb_name = f"thumb_{abs(hash(str(video_path))) % 1000000}.jpg"
     thumb_path = report_dir / thumb_name
     save_preview_thumbnail(video_path, best_sub_time, thumb_path)
