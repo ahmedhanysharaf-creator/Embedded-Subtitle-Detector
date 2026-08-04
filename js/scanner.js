@@ -2,12 +2,16 @@
  * Folder Scanner & Batch Queue Manager
  * Traverses file trees (Drag & Drop, WebKitDirectory, File System Access API)
  * Detects video files, sidecar subtitle files (.srt, .vtt, .ass), and correlates them.
- * Includes Audio-Targeted Multi-Frame Automatic Video Subtitle Analysis Engine (High Precision).
  *
- * KEY IMPROVEMENT: Instead of sampling equally-spaced timestamps (which may land on
- * scenes where nobody is talking), this engine first analyzes audio amplitude to
- * identify moments of likely speech/dialogue, then targets those timestamps for
- * visual hardsub frame analysis. This dramatically improves detection accuracy.
+ * KEY IMPROVEMENT: Two-phase audio-targeted hardsub detection.
+ * Phase 1: Connects the video element to Web Audio API AnalyserNode, seeks to 20
+ *          candidate timestamps, plays 100ms each, measures speech-frequency amplitude,
+ *          and selects the loudest moments (most likely dialogue/subtitles).
+ * Phase 2: Seeks to those audio-targeted timestamps and analyzes frames visually
+ *          for subtitle text (white/yellow/cyan + border/shadow contrast).
+ *
+ * This avoids the previous problem of sampling timestamps that land on silent
+ * scenes (intros, action montages, credits) where no subtitle text is visible.
  */
 class MediaScanner {
   constructor() {
@@ -147,263 +151,298 @@ class MediaScanner {
     return stem.toLowerCase().trim();
   }
 
-  // ============================================================
-  // AUDIO ACTIVITY ANALYZER
-  // Uses Web Audio API to decode small slices of the audio track
-  // and find time windows with highest RMS amplitude — these are
-  // the moments most likely to contain speech/dialogue.
-  // Returns timestamps (seconds) sorted by activity level.
-  // ============================================================
-  async getAudioActivityTimestamps(file, duration) {
-    const SLICE_SIZE = 1.5 * 1024 * 1024; // 1.5 MB per slice
-    const NUM_WINDOWS = 20; // divide each decoded audio into 20 windows
+  // ================================================================
+  // PHASE 1: AUDIO ACTIVITY SAMPLER
+  // Connects video element to AudioContext AnalyserNode, plays 100ms
+  // at each of 20 candidate timestamps, and measures speech-frequency
+  // amplitude. Returns the loudest timestamps (most likely dialogue).
+  //
+  // Why this works: Browser's video decoder is responsible for
+  // demuxing the container and decoding the audio, so we get accurate
+  // per-timestamp audio levels without needing raw file parsing.
+  // ================================================================
+  async _getDialogueTimestamps(objectUrl, duration) {
+    const CANDIDATE_COUNT = 20;
+    const PLAY_DURATION_MS = 100;   // play 100ms at each position to fill analyser
+    const MIN_GAP_SECONDS = 8;      // minimum spacing between selected timestamps
+    const MAX_SELECTED = 12;        // final number of timestamps to pass to visual phase
 
-    // Sample 4 positions across the video file (skipping intro/credits extremes)
-    const sliceOffsets = [
-      Math.floor(file.size * 0.12),
-      Math.floor(file.size * 0.35),
-      Math.floor(file.size * 0.55),
-      Math.floor(file.size * 0.65),
-    ];
+    // Build evenly-spaced candidate list from 8% to 87% of duration
+    const candidates = Array.from({ length: CANDIDATE_COUNT }, (_, i) =>
+      duration * (0.08 + (0.79 * i / (CANDIDATE_COUNT - 1)))
+    );
 
-    let audioCtx = null;
-    const windowedTimestamps = []; // { time: seconds, rms: number }
+    return new Promise((resolve) => {
+      const audioVideo = document.createElement('video');
+      audioVideo.preload = 'auto';
+      audioVideo.src = objectUrl;
 
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 22050 });
-    } catch (e) {
-      return this._fallbackTimestamps(duration);
-    }
+      // Timeout the entire audio phase at 10 seconds
+      const audioPhaseTimer = setTimeout(() => {
+        audioVideo.removeAttribute('src');
+        audioVideo.load();
+        resolve([]);
+      }, 10000);
 
-    for (const sliceStart of sliceOffsets) {
-      const actualStart = Math.max(0, Math.min(sliceStart, file.size - SLICE_SIZE));
-      const actualEnd = Math.min(actualStart + SLICE_SIZE, file.size);
-      if (actualEnd <= actualStart) continue;
+      audioVideo.onerror = () => {
+        clearTimeout(audioPhaseTimer);
+        resolve([]);
+      };
 
-      try {
-        const blob = file.slice(actualStart, actualEnd);
-        const arrayBuffer = await blob.arrayBuffer();
+      audioVideo.onloadedmetadata = async () => {
+        let audioCtx = null;
+        let analyser = null;
+        const samples = []; // { time, level }
 
-        let audioBuffer = null;
         try {
-          audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-        } catch (decodeErr) {
-          // This slice may not contain decodable audio frames — skip it
-          continue;
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+          // Resume AudioContext if suspended (browser policy)
+          if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
+          }
+
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 512; // frequencyBinCount = 256
+
+          // GainNode at 0 — processes audio for analysis but makes no sound
+          const gainNode = audioCtx.createGain();
+          gainNode.gain.value = 0;
+
+          const source = audioCtx.createMediaElementSource(audioVideo);
+          source.connect(analyser);
+          analyser.connect(gainNode);
+          gainNode.connect(audioCtx.destination);
+
+          const freqData = new Uint8Array(analyser.frequencyBinCount);
+
+          for (const t of candidates) {
+            await new Promise((seekDone) => {
+              audioVideo.onseeked = async () => {
+                try {
+                  await audioVideo.play();
+                  await new Promise(r => setTimeout(r, PLAY_DURATION_MS));
+                  audioVideo.pause();
+
+                  analyser.getByteFrequencyData(freqData);
+
+                  // Focus on speech-frequency range: ~86Hz to ~4kHz
+                  // With fftSize=512 @ ~44100Hz sample rate:
+                  // bin index i ≈ i * 44100 / 512 ≈ i * 86 Hz
+                  // bin 1 = ~86Hz, bin 46 = ~3.9kHz
+                  let speechSum = 0;
+                  for (let i = 1; i <= 46; i++) speechSum += freqData[i];
+                  const speechLevel = speechSum / 46;
+
+                  samples.push({ time: t, level: speechLevel });
+                } catch (playErr) {
+                  // play() blocked by autoplay policy or seek failed — record 0
+                  samples.push({ time: t, level: 0 });
+                }
+                seekDone();
+              };
+              audioVideo.currentTime = t;
+            });
+          }
+
+          try { audioCtx.close(); } catch (e) {}
+        } catch (contextErr) {
+          // AudioContext creation or MediaElementSource failed
+          if (audioCtx) try { audioCtx.close(); } catch (e) {}
         }
 
-        const channelData = audioBuffer.getChannelData(0);
-        const bufDuration = audioBuffer.duration;
-        const samplesPerWindow = Math.floor(channelData.length / NUM_WINDOWS);
+        clearTimeout(audioPhaseTimer);
+        audioVideo.removeAttribute('src');
+        audioVideo.load();
 
-        // Map file byte position proportionally to estimated video timestamp
-        const filePosFraction = actualStart / file.size;
-        const estimatedStartTime = filePosFraction * duration;
-
-        for (let w = 0; w < NUM_WINDOWS; w++) {
-          const windowStart = w * samplesPerWindow;
-          const windowEnd = Math.min(windowStart + samplesPerWindow, channelData.length);
-
-          // Compute RMS amplitude of this window
-          let sumSq = 0;
-          for (let s = windowStart; s < windowEnd; s++) {
-            sumSq += channelData[s] * channelData[s];
-          }
-          const rms = Math.sqrt(sumSq / (windowEnd - windowStart));
-
-          const windowFractionInBuffer = (w + 0.5) / NUM_WINDOWS;
-          const estimatedTime = estimatedStartTime + windowFractionInBuffer * bufDuration;
-
-          // Only include timestamps within the safe range (5% to 92%)
-          if (estimatedTime >= duration * 0.05 && estimatedTime <= duration * 0.92) {
-            windowedTimestamps.push({ time: estimatedTime, rms });
-          }
+        // If all levels are 0 (autoplay blocked), signal fallback needed
+        const allZero = samples.every(s => s.level === 0);
+        if (samples.length === 0 || allZero) {
+          resolve([]);
+          return;
         }
-      } catch (err) {
-        continue;
-      }
-    }
 
-    try { audioCtx.close(); } catch (e) {}
+        // Sort by speech amplitude descending (loudest = most likely talking)
+        samples.sort((a, b) => b.level - a.level);
 
-    if (windowedTimestamps.length < 4) {
-      return this._fallbackTimestamps(duration);
-    }
+        // De-duplicate: keep timestamps at least MIN_GAP_SECONDS apart
+        const selected = [];
+        for (const s of samples) {
+          const tooClose = selected.some(t => Math.abs(t - s.time) < MIN_GAP_SECONDS);
+          if (!tooClose) selected.push(s.time);
+          if (selected.length >= MAX_SELECTED) break;
+        }
 
-    // Sort by RMS descending — loudest windows (most likely dialogue) first
-    windowedTimestamps.sort((a, b) => b.rms - a.rms);
-
-    // De-duplicate: selected timestamps must be at least 8 seconds apart
-    const MIN_GAP_SECONDS = 8;
-    const selected = [];
-    for (const entry of windowedTimestamps) {
-      const tooClose = selected.some(t => Math.abs(t - entry.time) < MIN_GAP_SECONDS);
-      if (!tooClose) {
-        selected.push(entry.time);
-      }
-      if (selected.length >= 10) break;
-    }
-
-    // Pad with fallback timestamps if we got fewer than 5 good ones
-    if (selected.length < 5) {
-      const fallback = this._fallbackTimestamps(duration);
-      for (const t of fallback) {
-        const tooClose = selected.some(s => Math.abs(s - t) < MIN_GAP_SECONDS);
-        if (!tooClose) selected.push(t);
-        if (selected.length >= 10) break;
-      }
-    }
-
-    // Sort chronologically for efficient video seeking (avoids backward seeks)
-    selected.sort((a, b) => a - b);
-    return selected;
+        // Sort chronologically for efficient seeking (no backward jumps)
+        selected.sort((a, b) => a - b);
+        resolve(selected);
+      };
+    });
   }
 
-  /**
-   * Evenly-spaced fallback timestamps — used if audio analysis fails or is unavailable.
-   * Avoids the very start (intros/logos) and very end (credits).
-   */
-  _fallbackTimestamps(duration) {
-    return [0.12, 0.22, 0.32, 0.42, 0.52, 0.62, 0.72, 0.82].map(p => duration * p);
+  // ================================================================
+  // PHASE 2: VISUAL FRAME SUBTITLE DETECTOR
+  // Seeks a muted video element to the given timestamps, captures
+  // canvas frames, and checks the bottom 18% of each frame for
+  // characteristic hardsub text (bright pixels with dark contrast edge).
+  // ================================================================
+  _analyzeFramesVisually(objectUrl, sampleTimes, onDone) {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.src = objectUrl;
+
+    let capturedDataUrl = null;
+    let maxScore = -1;
+
+    const finish = (hasHardsubs) => {
+      video.removeAttribute('src');
+      video.load();
+      onDone({ hasHardsubs, confidence: hasHardsubs ? 0.95 : 0.80, frameDataUrl: capturedDataUrl });
+    };
+
+    video.onerror = () => finish(false);
+
+    video.onloadedmetadata = () => {
+      const duration = video.duration || 600;
+
+      // Clamp and deduplicate timestamps
+      let times = sampleTimes
+        .map(t => Math.max(2, Math.min(t, duration - 3)))
+        .filter((t, i, arr) => i === 0 || Math.abs(arr[i - 1] - t) > 1);
+
+      if (times.length === 0) times = [duration * 0.3];
+
+      let idx = 0;
+      let detectedCount = 0;
+
+      const analyzeFrame = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const w = video.videoWidth || 640;
+          const h = video.videoHeight || 360;
+          canvas.width = w;
+          canvas.height = h;
+
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(video, 0, 0, w, h);
+
+          // Subtitle zone: bottom 18% of frame (80%–98% height)
+          const subY = Math.floor(h * 0.80);
+          const subH = Math.floor(h * 0.18);
+          const imgData = ctx.getImageData(0, subY, w, subH);
+          const px = imgData.data;
+          const totalPx = w * subH;
+
+          let textCount = 0;
+          let borderCount = 0;
+          let shadowCount = 0;
+
+          for (let i = 0; i < px.length - 8; i += 4) {
+            const r = px[i], g = px[i + 1], b = px[i + 2];
+
+            // Common hardsub text colors
+            const isWhite  = r > 200 && g > 200 && b > 200;
+            const isYellow = r > 190 && g > 175 && b < 140;
+            const isCyan   = r < 110 && g > 195 && b > 195;
+
+            if (isWhite || isYellow || isCyan) {
+              textCount++;
+              const nr = px[i + 4], ng = px[i + 5], nb = px[i + 6];
+              if (nr < 70 && ng < 70 && nb < 70) borderCount++;       // hard outline
+              else if (nr < 140 && ng < 140 && nb < 140) shadowCount++; // soft shadow
+            }
+          }
+
+          const textRatio   = textCount  / totalPx;
+          const borderRatio = borderCount / totalPx;
+          const shadowRatio = shadowCount / totalPx;
+          const score = (borderRatio * 10) + (shadowRatio * 3) + textRatio;
+
+          if (score > maxScore || !capturedDataUrl) {
+            maxScore = score;
+            try { capturedDataUrl = canvas.toDataURL('image/jpeg', 0.82); } catch (e) {}
+          }
+
+          // Positive detection: bright text present AND dark-contrast neighbor
+          if (textRatio > 0.002 && (borderRatio > 0.0004 || shadowRatio > 0.001)) {
+            detectedCount++;
+          }
+
+          idx++;
+          if (idx < times.length) {
+            video.currentTime = times[idx];
+          } else {
+            finish(detectedCount >= 1);
+          }
+        } catch (err) {
+          finish(false);
+        }
+      };
+
+      video.onseeked = analyzeFrame;
+      video.currentTime = times[0];
+    };
   }
 
-  // ============================================================
-  // HIGH-PRECISION MULTI-FRAME VIDEO SUBTITLE ANALYSIS ENGINE
-  // Audio-activity-targeted: seeks to moments where someone is
-  // likely talking, then detects subtitle text in the frame.
-  // ============================================================
+  // ================================================================
+  // PUBLIC: COMBINED AUDIO+VISUAL HARDSUB ANALYSIS
+  // ================================================================
   async analyzeVideoFrameSubtitles(file) {
     return new Promise((resolve) => {
       if (!file || !file.size) {
         return resolve({ hasHardsubs: false, confidence: 0, frameDataUrl: null });
       }
 
-      const video = document.createElement('video');
-      video.muted = true;
-      video.playsInline = true;
-      video.preload = 'auto';
-
       const objectUrl = URL.createObjectURL(file);
-      video.src = objectUrl;
+      let settled = false;
 
-      let hasAnalyzed = false;
-      let capturedDataUrl = null;
-      let maxScore = -1;
-
-      const cleanUp = (result) => {
-        if (hasAnalyzed) return;
-        hasAnalyzed = true;
+      const done = (result) => {
+        if (settled) return;
+        settled = true;
         URL.revokeObjectURL(objectUrl);
-        video.removeAttribute('src');
-        video.load();
         resolve(result);
       };
 
-      // Extended timeout: 7s to allow audio analysis + frame seeking
-      const timer = setTimeout(() => {
-        cleanUp({ hasHardsubs: maxScore > 0.005, confidence: 0.5, frameDataUrl: capturedDataUrl });
-      }, 7000);
+      // Hard outer timeout — 15 seconds total
+      const masterTimer = setTimeout(() => done({ hasHardsubs: false, confidence: 0.4, frameDataUrl: null }), 15000);
 
-      video.onloadedmetadata = async () => {
-        const duration = video.duration || 1000;
+      // Quick metadata read to get duration for fallback timestamps
+      const metaVideo = document.createElement('video');
+      metaVideo.preload = 'metadata';
+      metaVideo.src = objectUrl;
 
-        // === STEP 1: Get audio-targeted timestamps (dialogue moments) ===
-        let sampleTimes;
-        try {
-          sampleTimes = await this.getAudioActivityTimestamps(file, duration);
-        } catch (e) {
-          sampleTimes = this._fallbackTimestamps(duration);
-        }
-
-        // Clamp timestamps and remove duplicates
-        sampleTimes = sampleTimes
-          .map(t => Math.max(2, Math.min(t, duration - 3)))
-          .filter((t, i, arr) => i === 0 || Math.abs(arr[i - 1] - t) > 1);
-
-        if (sampleTimes.length === 0) {
-          sampleTimes = this._fallbackTimestamps(duration);
-        }
-
-        // === STEP 2: For each timestamp, seek and analyze the frame ===
-        let sampleIndex = 0;
-        let detectedFrameCount = 0;
-
-        const analyzeCurrentFrame = () => {
-          try {
-            const canvas = document.createElement('canvas');
-            const width = video.videoWidth || 640;
-            const height = video.videoHeight || 360;
-            canvas.width = width;
-            canvas.height = height;
-
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0, width, height);
-
-            // Subtitle zone: bottom 16% of video frame (82% to 98% height)
-            const subY = Math.floor(height * 0.82);
-            const subH = Math.floor(height * 0.16);
-            const imgData = ctx.getImageData(0, subY, width, subH);
-            const pixels = imgData.data;
-
-            let textPixelCount = 0;
-            let borderedTextCount = 0;
-            const totalPixels = width * subH;
-
-            for (let i = 0; i < pixels.length - 8; i += 4) {
-              const r = pixels[i];
-              const g = pixels[i + 1];
-              const b = pixels[i + 2];
-
-              const isWhiteText = r > 205 && g > 205 && b > 205;
-              const isYellowText = r > 195 && g > 180 && b < 135;
-
-              if (isWhiteText || isYellowText) {
-                textPixelCount++;
-                const nextR = pixels[i + 4];
-                const nextG = pixels[i + 5];
-                const nextB = pixels[i + 6];
-                if (nextR < 65 && nextG < 65 && nextB < 65) {
-                  borderedTextCount++;
-                }
-              }
-            }
-
-            const textRatio = textPixelCount / totalPixels;
-            const borderRatio = borderedTextCount / totalPixels;
-            const currentScore = (borderRatio * 10) + textRatio;
-
-            if (currentScore > maxScore || !capturedDataUrl) {
-              maxScore = currentScore;
-              try {
-                capturedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
-              } catch (e) {}
-            }
-
-            if (textRatio > 0.0028 && borderRatio > 0.0006) {
-              detectedFrameCount++;
-            }
-
-            sampleIndex++;
-            if (sampleIndex < sampleTimes.length) {
-              video.currentTime = sampleTimes[sampleIndex];
-            } else {
-              clearTimeout(timer);
-              const isHardsub = detectedFrameCount >= 1;
-              cleanUp({ hasHardsubs: isHardsub, confidence: isHardsub ? 0.95 : 0.80, frameDataUrl: capturedDataUrl });
-            }
-          } catch (err) {
-            clearTimeout(timer);
-            cleanUp({ hasHardsubs: false, confidence: 0.5, frameDataUrl: capturedDataUrl });
-          }
-        };
-
-        video.onseeked = analyzeCurrentFrame;
-        video.currentTime = sampleTimes[0];
+      metaVideo.onerror = () => {
+        clearTimeout(masterTimer);
+        done({ hasHardsubs: false, confidence: 0.4, frameDataUrl: null });
       };
 
-      video.onerror = () => {
-        clearTimeout(timer);
-        cleanUp({ hasHardsubs: false, confidence: 0.5, frameDataUrl: null });
+      metaVideo.onloadedmetadata = async () => {
+        const duration = metaVideo.duration || 600;
+        metaVideo.removeAttribute('src');
+        metaVideo.load();
+
+        // Fallback: 15 evenly-spaced timestamps (vs original 8) for better coverage
+        const fallbackTimes = Array.from({ length: 15 }, (_, i) =>
+          duration * (0.07 + (0.83 * i / 14))
+        );
+
+        // Phase 1: Try audio-targeted timestamp selection
+        let targetTimes = [];
+        try {
+          targetTimes = await this._getDialogueTimestamps(objectUrl, duration);
+        } catch (e) {
+          targetTimes = [];
+        }
+
+        const sampleTimes = targetTimes.length >= 4 ? targetTimes : fallbackTimes;
+
+        // Phase 2: Visual frame analysis on chosen timestamps
+        this._analyzeFramesVisually(objectUrl, sampleTimes, (result) => {
+          clearTimeout(masterTimer);
+          done(result);
+        });
       };
     });
   }
@@ -427,7 +466,7 @@ class MediaScanner {
     for (let i = 0; i < total; i++) {
       const file = videoFiles[i];
       const percent = Math.round(((i + 1) / total) * 100);
-      
+
       if (onProgress) {
         onProgress({
           currentIndex: i + 1,
@@ -446,7 +485,7 @@ class MediaScanner {
       const fullSoftTracks = allSubs.filter(s => !s.isForced && !/(forced|foreign|partial|narrative)/i.test(s.title || ''));
       const hasFullSoft = fullSoftTracks.length > 0;
 
-      // Audio-targeted visual hardsub analysis
+      // Two-phase audio-targeted visual hardsub analysis
       const visualRes = await this.analyzeVideoFrameSubtitles(file);
 
       const subStatus = visualRes.hasHardsubs ? 'has-subs' : 'no-subs';
