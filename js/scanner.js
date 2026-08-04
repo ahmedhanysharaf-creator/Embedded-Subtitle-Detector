@@ -2,7 +2,12 @@
  * Folder Scanner & Batch Queue Manager
  * Traverses file trees (Drag & Drop, WebKitDirectory, File System Access API)
  * Detects video files, sidecar subtitle files (.srt, .vtt, .ass), and correlates them.
- * Includes Multi-Frame Automatic Video Subtitle Analysis Engine (High Precision).
+ * Includes Audio-Targeted Multi-Frame Automatic Video Subtitle Analysis Engine (High Precision).
+ *
+ * KEY IMPROVEMENT: Instead of sampling equally-spaced timestamps (which may land on
+ * scenes where nobody is talking), this engine first analyzes audio amplitude to
+ * identify moments of likely speech/dialogue, then targets those timestamps for
+ * visual hardsub frame analysis. This dramatically improves detection accuracy.
  */
 class MediaScanner {
   constructor() {
@@ -142,10 +147,131 @@ class MediaScanner {
     return stem.toLowerCase().trim();
   }
 
+  // ============================================================
+  // AUDIO ACTIVITY ANALYZER
+  // Uses Web Audio API to decode small slices of the audio track
+  // and find time windows with highest RMS amplitude — these are
+  // the moments most likely to contain speech/dialogue.
+  // Returns timestamps (seconds) sorted by activity level.
+  // ============================================================
+  async getAudioActivityTimestamps(file, duration) {
+    const SLICE_SIZE = 1.5 * 1024 * 1024; // 1.5 MB per slice
+    const NUM_WINDOWS = 20; // divide each decoded audio into 20 windows
+
+    // Sample 4 positions across the video file (skipping intro/credits extremes)
+    const sliceOffsets = [
+      Math.floor(file.size * 0.12),
+      Math.floor(file.size * 0.35),
+      Math.floor(file.size * 0.55),
+      Math.floor(file.size * 0.65),
+    ];
+
+    let audioCtx = null;
+    const windowedTimestamps = []; // { time: seconds, rms: number }
+
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 22050 });
+    } catch (e) {
+      return this._fallbackTimestamps(duration);
+    }
+
+    for (const sliceStart of sliceOffsets) {
+      const actualStart = Math.max(0, Math.min(sliceStart, file.size - SLICE_SIZE));
+      const actualEnd = Math.min(actualStart + SLICE_SIZE, file.size);
+      if (actualEnd <= actualStart) continue;
+
+      try {
+        const blob = file.slice(actualStart, actualEnd);
+        const arrayBuffer = await blob.arrayBuffer();
+
+        let audioBuffer = null;
+        try {
+          audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        } catch (decodeErr) {
+          // This slice may not contain decodable audio frames — skip it
+          continue;
+        }
+
+        const channelData = audioBuffer.getChannelData(0);
+        const bufDuration = audioBuffer.duration;
+        const samplesPerWindow = Math.floor(channelData.length / NUM_WINDOWS);
+
+        // Map file byte position proportionally to estimated video timestamp
+        const filePosFraction = actualStart / file.size;
+        const estimatedStartTime = filePosFraction * duration;
+
+        for (let w = 0; w < NUM_WINDOWS; w++) {
+          const windowStart = w * samplesPerWindow;
+          const windowEnd = Math.min(windowStart + samplesPerWindow, channelData.length);
+
+          // Compute RMS amplitude of this window
+          let sumSq = 0;
+          for (let s = windowStart; s < windowEnd; s++) {
+            sumSq += channelData[s] * channelData[s];
+          }
+          const rms = Math.sqrt(sumSq / (windowEnd - windowStart));
+
+          const windowFractionInBuffer = (w + 0.5) / NUM_WINDOWS;
+          const estimatedTime = estimatedStartTime + windowFractionInBuffer * bufDuration;
+
+          // Only include timestamps within the safe range (5% to 92%)
+          if (estimatedTime >= duration * 0.05 && estimatedTime <= duration * 0.92) {
+            windowedTimestamps.push({ time: estimatedTime, rms });
+          }
+        }
+      } catch (err) {
+        continue;
+      }
+    }
+
+    try { audioCtx.close(); } catch (e) {}
+
+    if (windowedTimestamps.length < 4) {
+      return this._fallbackTimestamps(duration);
+    }
+
+    // Sort by RMS descending — loudest windows (most likely dialogue) first
+    windowedTimestamps.sort((a, b) => b.rms - a.rms);
+
+    // De-duplicate: selected timestamps must be at least 8 seconds apart
+    const MIN_GAP_SECONDS = 8;
+    const selected = [];
+    for (const entry of windowedTimestamps) {
+      const tooClose = selected.some(t => Math.abs(t - entry.time) < MIN_GAP_SECONDS);
+      if (!tooClose) {
+        selected.push(entry.time);
+      }
+      if (selected.length >= 10) break;
+    }
+
+    // Pad with fallback timestamps if we got fewer than 5 good ones
+    if (selected.length < 5) {
+      const fallback = this._fallbackTimestamps(duration);
+      for (const t of fallback) {
+        const tooClose = selected.some(s => Math.abs(s - t) < MIN_GAP_SECONDS);
+        if (!tooClose) selected.push(t);
+        if (selected.length >= 10) break;
+      }
+    }
+
+    // Sort chronologically for efficient video seeking (avoids backward seeks)
+    selected.sort((a, b) => a - b);
+    return selected;
+  }
+
   /**
-   * High-Precision Multi-Frame Video Subtitle Analysis Engine
-   * Samples 3 video timestamps (25%, 50%, 75%) and analyzes text brightness & dark outline density in subtitle region
+   * Evenly-spaced fallback timestamps — used if audio analysis fails or is unavailable.
+   * Avoids the very start (intros/logos) and very end (credits).
    */
+  _fallbackTimestamps(duration) {
+    return [0.12, 0.22, 0.32, 0.42, 0.52, 0.62, 0.72, 0.82].map(p => duration * p);
+  }
+
+  // ============================================================
+  // HIGH-PRECISION MULTI-FRAME VIDEO SUBTITLE ANALYSIS ENGINE
+  // Audio-activity-targeted: seeks to moments where someone is
+  // likely talking, then detects subtitle text in the frame.
+  // ============================================================
   async analyzeVideoFrameSubtitles(file) {
     return new Promise((resolve) => {
       if (!file || !file.size) {
@@ -173,17 +299,32 @@ class MediaScanner {
         resolve(result);
       };
 
-      // Fail-safe timeout: 3.5 seconds to scan 8 spread-out video timestamps
+      // Extended timeout: 7s to allow audio analysis + frame seeking
       const timer = setTimeout(() => {
         cleanUp({ hasHardsubs: maxScore > 0.005, confidence: 0.5, frameDataUrl: capturedDataUrl });
-      }, 3500);
+      }, 7000);
 
-      video.onloadedmetadata = () => {
+      video.onloadedmetadata = async () => {
         const duration = video.duration || 1000;
-        // 8 spread-out timestamps across 12% to 82% duration
-        const samplePercentages = [0.12, 0.22, 0.32, 0.42, 0.52, 0.62, 0.72, 0.82];
-        const sampleTimes = samplePercentages.map(p => duration * p);
 
+        // === STEP 1: Get audio-targeted timestamps (dialogue moments) ===
+        let sampleTimes;
+        try {
+          sampleTimes = await this.getAudioActivityTimestamps(file, duration);
+        } catch (e) {
+          sampleTimes = this._fallbackTimestamps(duration);
+        }
+
+        // Clamp timestamps and remove duplicates
+        sampleTimes = sampleTimes
+          .map(t => Math.max(2, Math.min(t, duration - 3)))
+          .filter((t, i, arr) => i === 0 || Math.abs(arr[i - 1] - t) > 1);
+
+        if (sampleTimes.length === 0) {
+          sampleTimes = this._fallbackTimestamps(duration);
+        }
+
+        // === STEP 2: For each timestamp, seek and analyze the frame ===
         let sampleIndex = 0;
         let detectedFrameCount = 0;
 
@@ -231,7 +372,6 @@ class MediaScanner {
             const borderRatio = borderedTextCount / totalPixels;
             const currentScore = (borderRatio * 10) + textRatio;
 
-            // Always capture frame with highest subtitle text density
             if (currentScore > maxScore || !capturedDataUrl) {
               maxScore = currentScore;
               try {
@@ -269,7 +409,7 @@ class MediaScanner {
   }
 
   /**
-   * Execute batch scan with live progress updates & high-precision multi-frame analysis
+   * Execute batch scan with live progress updates & audio-targeted multi-frame analysis
    */
   async scanBatch(scanData, onProgress, onFileComplete) {
     const videoFiles = scanData.videoFiles || (Array.isArray(scanData) ? scanData : []);
@@ -277,7 +417,6 @@ class MediaScanner {
     const results = [];
     const total = videoFiles.length;
 
-    // Index sidecar subtitle files by file stem
     const sidecarMap = new Map();
     subtitleFiles.forEach(subFile => {
       const stem = this.getFileStem(subFile.name);
@@ -298,22 +437,18 @@ class MediaScanner {
         });
       }
 
-      // Analyze container streams via MediaInfo WASM / Fast Header Parser
       const analysis = await window.mediaInfoEngine.analyzeFile(file);
 
-      // Check matching sidecar subtitle files
       const stem = this.getFileStem(file.name);
       const sidecarSubs = sidecarMap.get(stem) || [];
 
-      // Check full embedded softsub tracks (excluding forced foreign-speech captions)
       const allSubs = (analysis && analysis.subtitles) ? analysis.subtitles : [];
       const fullSoftTracks = allSubs.filter(s => !s.isForced && !/(forced|foreign|partial|narrative)/i.test(s.title || ''));
       const hasFullSoft = fullSoftTracks.length > 0;
 
-      // Attempt visual video frame analysis directly in browser
+      // Audio-targeted visual hardsub analysis
       const visualRes = await this.analyzeVideoFrameSubtitles(file);
 
-      // Determine 2-Category subtitle status strictly based on visual hardcoded/burned-in frame analysis (subtitles in video image framing)
       const subStatus = visualRes.hasHardsubs ? 'has-subs' : 'no-subs';
 
       const mediaRecord = {
