@@ -3,16 +3,16 @@
  * Traverses file trees (Drag & Drop, WebKitDirectory, File System Access API)
  * Detects video files, sidecar subtitle files (.srt, .vtt, .ass), and correlates them.
  *
- * HARDSUB DETECTION ENGINE v4 — HIGH-PRECISION DUAL-EDGE STROKE + ROW HISTOGRAM ANALYSIS
+ * HARDSUB DETECTION ENGINE v5 — MULTI-SEGMENT TIMELINE PERSISTENCE VERIFICATION
  *
- * Eliminates false positives from white scene objects (shirts, walls, lights, snow, reflections):
- * 1. Dual-Edge Outline Requirement: Text pixels must be bounded by dark outline/shadow pixels
- *    (<85 RGB) on BOTH left and right sides within 1-5px (characteristic of thin letter strokes).
- * 2. Row Histogram Analysis: Subtitles form sharp horizontal line bands (15-25px height).
- *    Measures peak density in moving vertical row windows.
- * 3. Strict Color Bounds: Pure White (R,G,B>200, saturation<35) and Subtitle Yellow (R>200, G>185, B<125).
- * 4. Multi-Source Subtitle Classification: Correctly integrates container softsubs, sidecar files,
- *    and visual hardsubs into overall subStatus.
+ * Solves Director's Cut / Foreign-Dialogue Only Subtitles (e.g. 20-second Chinese speech captions):
+ * 1. Multi-Segment Timeline Sampling: Samples 6 distinct points across the movie timeline
+ *    (10%, 25%, 40%, 55%, 70%, 85%).
+ * 2. Persistence Proof: Requires hardsub detections in AT LEAST 3 DISTINCT TIMELINE SEGMENTS
+ *    to confirm full movie subtitles. Temporary foreign-speech captions appear in only 1 segment,
+ *    so they are flagged as `isPartialForced` and NOT counted as full subtitles.
+ * 3. Strict Softsub/Sidecar Filtering: Embedded tracks and sidecars labeled "forced", "foreign",
+ *    "partial", or "narrative" are filtered out from full-subtitle status.
  */
 class MediaScanner {
   constructor() {
@@ -143,7 +143,7 @@ class MediaScanner {
 
   // ================================================================
   // HIGH-PRECISION FRAME PIXEL ANALYZER
-  // Uses dual-edge outline stroke matching & row histogram density.
+  // Dual-edge outline stroke matching & row histogram density.
   // Rejects large bright objects (shirts, walls, reflections, snow).
   // ================================================================
   _analyzeFramePixels(video) {
@@ -156,7 +156,6 @@ class MediaScanner {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, w, h);
 
-      // Probe center pixel to verify frame is decodable
       const probe = ctx.getImageData(Math.floor(w / 2), Math.floor(h / 2), 1, 1).data;
       const frameIsEmpty = (probe[0] === 0 && probe[1] === 0 && probe[2] === 0);
 
@@ -233,14 +232,8 @@ class MediaScanner {
 
       const strokeRatio = dualEdgeOutlineCount / totalPx;
       const windowDensityRatio = maxRowWindowSum / (subW * windowSize);
-
       const score = (windowDensityRatio * 25) + (strokeRatio * 15);
 
-      // HIGH-CONFIDENCE SUBTITLE FRAME TEST:
-      // Real subtitle frames require:
-      // - At least 0.08% of subtitle box pixels are dual-edge bounded letter strokes
-      // - Peak row window density > 0.6%
-      // - Total dual-edge count > 50 stroke pixels
       const isSubFrame = strokeRatio > 0.0008
         && windowDensityRatio > 0.006
         && dualEdgeOutlineCount > 50;
@@ -252,35 +245,53 @@ class MediaScanner {
   }
 
   // ================================================================
-  // MAIN HARDSUB ANALYSIS ENGINE — Continuous Playback + Speech Gating
+  // HARDSUB ENGINE WITH MULTI-SEGMENT PERSISTENCE VERIFICATION
+  // Samples 6 distinct timeline segments (10%, 25%, 40%, 55%, 70%, 85%).
+  // Requires hardsubs in AT LEAST 3 DISTINCT SEGMENTS to confirm full subtitles.
+  // Foreign-dialogue only captions appear in 1 segment and are rejected.
   // ================================================================
   async analyzeVideoFrameSubtitles(file) {
     return new Promise((resolve) => {
       if (!file || !file.size) {
-        return resolve({ hasHardsubs: false, confidence: 0, frameDataUrl: null });
+        return resolve({ hasHardsubs: false, isPartialForced: false, confidence: 0, frameDataUrl: null });
       }
 
       const objectUrl = URL.createObjectURL(file);
       let settled = false;
       let capturedDataUrl = null;
       let maxScore = -1;
-      let detectedCount = 0;
+
+      // 6 timeline points spread across the movie
+      const SEGMENT_STARTS = [0.10, 0.25, 0.40, 0.55, 0.70, 0.85];
+      const MAX_FRAMES_PER_SEGMENT = 14;
+      const PLAYBACK_RATE = 4;
+
+      const segmentDetections = new Set(); // stores indices of segments with positive sub frames
       let totalFramesAnalyzed = 0;
 
-      const done = (hasHardsubs) => {
+      const finish = () => {
         if (settled) return;
         settled = true;
         URL.revokeObjectURL(objectUrl);
+
+        // Require hardsubs in AT LEAST 3 DISTINCT TIMELINE SEGMENTS to confirm full subtitles
+        // If detected in only 1 or 2 segments, it is a brief foreign-dialogue / director's cut caption
+        const positiveSegmentsCount = segmentDetections.size;
+        const hasFullHardsubs = positiveSegmentsCount >= 3;
+        const isPartialForced = positiveSegmentsCount > 0 && positiveSegmentsCount < 3;
+
         resolve({
-          hasHardsubs,
-          confidence: hasHardsubs ? 0.95 : (totalFramesAnalyzed > 8 ? 0.85 : 0.50),
+          hasHardsubs: hasFullHardsubs,
+          isPartialForced: isPartialForced,
+          positiveSegmentsCount: positiveSegmentsCount,
+          confidence: hasFullHardsubs ? 0.96 : (totalFramesAnalyzed > 10 ? 0.85 : 0.50),
           frameDataUrl: capturedDataUrl
         });
       };
 
-      // 15 second max hard cap
+      // 15s timeout
       const masterTimer = setTimeout(() => {
-        done(detectedCount >= 2 || maxScore > 0.08);
+        finish();
       }, 15000);
 
       const video = document.createElement('video');
@@ -298,7 +309,7 @@ class MediaScanner {
         analyser = audioCtx.createAnalyser();
         analyser.fftSize = 256;
         const gain = audioCtx.createGain();
-        gain.gain.value = 0; // silent
+        gain.gain.value = 0;
         const source = audioCtx.createMediaElementSource(video);
         source.connect(analyser);
         analyser.connect(gain);
@@ -314,10 +325,6 @@ class MediaScanner {
       const SPEECH_BIN_END   = 12;
       const SPEECH_THRESHOLD = 20;
 
-      const SEGMENT_STARTS = [0.14, 0.36, 0.58, 0.78];
-      const MAX_FRAMES_PER_SEGMENT = 18;
-      const PLAYBACK_RATE = 4;
-
       let duration = 600;
       let segIdx = 0;
       let segFrameCount = 0;
@@ -332,19 +339,18 @@ class MediaScanner {
         video.load();
       };
 
-      const finish = (hasHardsubs) => {
-        cleanup();
-        clearTimeout(masterTimer);
-        done(hasHardsubs);
-      };
-
       const goToNextSegment = () => {
         video.pause();
         segIdx++;
-        if (segIdx >= SEGMENT_STARTS.length) {
-          finish(detectedCount >= 2 || maxScore > 0.08);
+
+        // Early exit optimization: 3 distinct timeline segments confirmed = full subtitles proven!
+        if (segmentDetections.size >= 3 || segIdx >= SEGMENT_STARTS.length) {
+          cleanup();
+          clearTimeout(masterTimer);
+          finish();
           return;
         }
+
         segFrameCount = 0;
         emptyFrameCount = 0;
         video.currentTime = duration * SEGMENT_STARTS[segIdx];
@@ -368,7 +374,7 @@ class MediaScanner {
 
         segFrameCount++;
 
-        if (emptyFrameCount > 5 && segFrameCount > 8) {
+        if (emptyFrameCount > 4 && segFrameCount > 6) {
           goToNextSegment();
           return;
         }
@@ -378,7 +384,7 @@ class MediaScanner {
           return;
         }
 
-        // AUDIO GATE: Only evaluate frames when speech audio amplitude is detected
+        // AUDIO GATE: Only evaluate frames during speech audio
         if (audioGatingEnabled && analyser && freqData) {
           analyser.getByteFrequencyData(freqData);
           let speechSum = 0;
@@ -389,7 +395,6 @@ class MediaScanner {
           if (speechLevel < SPEECH_THRESHOLD) return;
         }
 
-        // VISUAL FRAME ANALYSIS
         const result = this._analyzeFramePixels(video);
 
         if (result.frameIsEmpty) {
@@ -407,18 +412,17 @@ class MediaScanner {
         }
 
         if (result.isSubFrame) {
-          detectedCount++;
-          // Require at least 2 distinct positive frames across playback to confirm hardsubs
-          if (detectedCount >= 2) {
-            finish(true);
-          }
+          segmentDetections.add(segIdx);
+
+          // Once current segment is confirmed positive, move quickly to next segment to test timeline persistence
+          goToNextSegment();
         }
       };
 
       video.onerror = () => {
         clearTimeout(masterTimer);
         cleanup();
-        done(false);
+        finish();
       };
 
       video.onloadedmetadata = () => {
@@ -459,23 +463,32 @@ class MediaScanner {
         });
       }
 
-      // 1. Container Softsub Metadata Parsing (MKV/MP4 headers via WASM / Native Parser)
+      // 1. Container Softsub Metadata Parsing
       const analysis = await window.mediaInfoEngine.analyzeFile(file);
 
-      // 2. Matching Sidecar Subtitle Files (.srt, .vtt, .ass in folder)
+      // Filter out forced/foreign/narrative embedded tracks
+      const allSubs = (analysis && analysis.subtitles) ? analysis.subtitles : [];
+      const fullSoftTracks = allSubs.filter(s =>
+        !s.isForced &&
+        !/(forced|foreign|partial|narrative|director|commentary|chapter)/i.test(s.title || '') &&
+        !/(forced|foreign|partial)/i.test(s.format || '')
+      );
+      const hasFullSoft = fullSoftTracks.length > 0;
+
+      // 2. Sidecar Subtitle Files
       const stem = this.getFileStem(file.name);
       const sidecarSubs = sidecarMap.get(stem) || [];
+      const fullSidecarSubs = sidecarSubs.filter(subName =>
+        !/(forced|foreign|partial|narrative)/i.test(subName)
+      );
+      const hasFullSidecar = fullSidecarSubs.length > 0;
 
-      const allSubs = (analysis && analysis.subtitles) ? analysis.subtitles : [];
-      const fullSoftTracks = allSubs.filter(s => !s.isForced && !/(forced|foreign|partial|narrative)/i.test(s.title || ''));
-      const hasFullSoft = fullSoftTracks.length > 0 || (analysis && analysis.hasSubtitles);
-
-      // 3. High-Precision Visual Hardsub Detection (Burned-in subtitles in frame image)
+      // 3. Visual Hardsub Analysis (Requires detection across >= 3 timeline segments)
       const visualRes = await this.analyzeVideoFrameSubtitles(file);
 
-      // OVERALL SUBTITLE STATUS: Present if ANY source has subtitles
-      const hasAnySubtitles = hasFullSoft || sidecarSubs.length > 0 || visualRes.hasHardsubs;
-      const subStatus = hasAnySubtitles ? 'has-subs' : 'no-subs';
+      // OVERALL SUBTITLE STATUS: Full Subtitles present if ANY source has FULL subtitles
+      const hasFullSubtitles = hasFullSoft || hasFullSidecar || visualRes.hasHardsubs;
+      const subStatus = hasFullSubtitles ? 'has-subs' : 'no-subs';
 
       const mediaRecord = {
         id: `media_${Date.now()}_${i}`,
@@ -490,7 +503,8 @@ class MediaScanner {
         thumbnailDataUrl: visualRes.frameDataUrl,
         hasHardsubs: visualRes.hasHardsubs,
         hasSoftsubs: hasFullSoft,
-        hasSidecar: sidecarSubs.length > 0
+        hasSidecar: hasFullSidecar,
+        isPartialForced: visualRes.isPartialForced
       };
 
       results.push(mediaRecord);
