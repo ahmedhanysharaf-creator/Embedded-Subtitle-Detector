@@ -3,14 +3,16 @@
  * Traverses file trees (Drag & Drop, WebKitDirectory, File System Access API)
  * Detects video files, sidecar subtitle files (.srt, .vtt, .ass), and correlates them.
  *
- * HARDSUB DETECTION ENGINE v3 — CONTINUOUS PLAYBACK + AUDIO GATING
+ * HARDSUB DETECTION ENGINE v4 — HIGH-PRECISION DUAL-EDGE STROKE + ROW HISTOGRAM ANALYSIS
  *
- * Architecture: One video element plays at 4x speed through 4 segments.
- * `ontimeupdate` fires every ~250ms real time (~1 video-second at 4x).
- * At each event, audio amplitude is measured via AnalyserNode. If the
- * amplitude is above a speech threshold, the frame is captured and
- * analyzed for subtitle text. This guarantees we only inspect frames
- * where someone is actually talking — dramatically improving accuracy.
+ * Eliminates false positives from white scene objects (shirts, walls, lights, snow, reflections):
+ * 1. Dual-Edge Outline Requirement: Text pixels must be bounded by dark outline/shadow pixels
+ *    (<85 RGB) on BOTH left and right sides within 1-5px (characteristic of thin letter strokes).
+ * 2. Row Histogram Analysis: Subtitles form sharp horizontal line bands (15-25px height).
+ *    Measures peak density in moving vertical row windows.
+ * 3. Strict Color Bounds: Pure White (R,G,B>200, saturation<35) and Subtitle Yellow (R>200, G>185, B<125).
+ * 4. Multi-Source Subtitle Classification: Correctly integrates container softsubs, sidecar files,
+ *    and visual hardsubs into overall subStatus.
  */
 class MediaScanner {
   constructor() {
@@ -140,10 +142,9 @@ class MediaScanner {
   }
 
   // ================================================================
-  // PIXEL ANALYZER — called per-frame during playback
-  // Checks the subtitle zone (bottom 19% of frame) for bright text
-  // pixels adjacent to dark pixels (hardsub characteristic).
-  // Returns a score object { textRatio, borderRatio, shadowRatio, score }
+  // HIGH-PRECISION FRAME PIXEL ANALYZER
+  // Uses dual-edge outline stroke matching & row histogram density.
+  // Rejects large bright objects (shirts, walls, reflections, snow).
   // ================================================================
   _analyzeFramePixels(video) {
     try {
@@ -155,53 +156,103 @@ class MediaScanner {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, w, h);
 
-      // Check if canvas is entirely black (codec not supported / security error)
+      // Probe center pixel to verify frame is decodable
       const probe = ctx.getImageData(Math.floor(w / 2), Math.floor(h / 2), 1, 1).data;
-      const frameIsEmpty = probe[0] === 0 && probe[1] === 0 && probe[2] === 0;
+      const frameIsEmpty = (probe[0] === 0 && probe[1] === 0 && probe[2] === 0);
 
-      // Subtitle zone: bottom 19% of frame (from 79% to 98% height)
-      const subY = Math.floor(h * 0.79);
-      const subH = Math.floor(h * 0.19);
-      const imgData = ctx.getImageData(0, subY, w, subH);
+      // Subtitle Zone: Lower 18% of frame, horizontally bounded (10% to 90% width)
+      const subX = Math.floor(w * 0.10);
+      const subW = Math.floor(w * 0.80);
+      const subY = Math.floor(h * 0.78);
+      const subH = Math.floor(h * 0.18);
+
+      const imgData = ctx.getImageData(subX, subY, subW, subH);
       const px = imgData.data;
-      const totalPx = w * subH;
+      const totalPx = subW * subH;
 
-      let textCount = 0, borderCount = 0, shadowCount = 0;
+      const rowCounts = new Int32Array(subH);
+      let textStrokePixels = 0;
+      let dualEdgeOutlineCount = 0;
 
-      for (let i = 0; i < px.length - 8; i += 4) {
-        const r = px[i], g = px[i + 1], b = px[i + 2];
+      for (let y = 0; y < subH; y++) {
+        const rowOffset = y * subW * 4;
+        for (let x = 5; x < subW - 5; x++) {
+          const idx = rowOffset + x * 4;
+          const r = px[idx], g = px[idx + 1], b = px[idx + 2];
 
-        // Common hardsub text colors (white, yellow, cyan)
-        const isWhite  = r > 195 && g > 195 && b > 195;
-        const isYellow = r > 185 && g > 170 && b < 150;
-        const isCyan   = r < 120 && g > 188 && b > 188;
+          // 1. High-brightness White: R,G,B > 200 with low color variance (saturation < 35)
+          const maxRGB = Math.max(r, g, b);
+          const minRGB = Math.min(r, g, b);
+          const isWhiteText = minRGB > 200 && (maxRGB - minRGB) < 35;
 
-        if (isWhite || isYellow || isCyan) {
-          textCount++;
-          const nr = px[i + 4], ng = px[i + 5], nb = px[i + 6];
-          if      (nr < 80  && ng < 80  && nb < 80 ) borderCount++; // hard outline
-          else if (nr < 150 && ng < 150 && nb < 150) shadowCount++; // soft shadow
+          // 2. Subtitle Yellow: R > 200, G > 185, B < 125, R > B + 75
+          const isYellowText = r > 200 && g > 185 && b < 125 && (r - b) > 75;
+
+          if (isWhiteText || isYellowText) {
+            textStrokePixels++;
+
+            // DUAL-EDGE OUTLINE CHECK: Must have dark pixel (<85 RGB) within 1-5px LEFT AND RIGHT
+            let leftDark = false;
+            for (let dx = 1; dx <= 5; dx++) {
+              const lIdx = rowOffset + (x - dx) * 4;
+              if (px[lIdx] < 85 && px[lIdx + 1] < 85 && px[lIdx + 2] < 85) {
+                leftDark = true;
+                break;
+              }
+            }
+
+            let rightDark = false;
+            for (let dx = 1; dx <= 5; dx++) {
+              const rIdx = rowOffset + (x + dx) * 4;
+              if (px[rIdx] < 85 && px[rIdx + 1] < 85 && px[rIdx + 2] < 85) {
+                rightDark = true;
+                break;
+              }
+            }
+
+            if (leftDark && rightDark) {
+              dualEdgeOutlineCount++;
+              rowCounts[y]++;
+            }
+          }
         }
       }
 
-      const textRatio   = textCount  / totalPx;
-      const borderRatio = borderCount / totalPx;
-      const shadowRatio = shadowCount / totalPx;
-      const score = (borderRatio * 10) + (shadowRatio * 3) + textRatio;
+      // ROW HISTOGRAM PEAK ANALYSIS: Subtitles form horizontal row lines (~15-25px height)
+      let maxRowWindowSum = 0;
+      const windowSize = Math.min(25, subH);
+      let currentWindowSum = 0;
 
-      return { textRatio, borderRatio, shadowRatio, score, frameIsEmpty, canvas };
+      for (let y = 0; y < windowSize; y++) currentWindowSum += rowCounts[y];
+      maxRowWindowSum = currentWindowSum;
+
+      for (let y = windowSize; y < subH; y++) {
+        currentWindowSum += rowCounts[y] - rowCounts[y - windowSize];
+        if (currentWindowSum > maxRowWindowSum) maxRowWindowSum = currentWindowSum;
+      }
+
+      const strokeRatio = dualEdgeOutlineCount / totalPx;
+      const windowDensityRatio = maxRowWindowSum / (subW * windowSize);
+
+      const score = (windowDensityRatio * 25) + (strokeRatio * 15);
+
+      // HIGH-CONFIDENCE SUBTITLE FRAME TEST:
+      // Real subtitle frames require:
+      // - At least 0.08% of subtitle box pixels are dual-edge bounded letter strokes
+      // - Peak row window density > 0.6%
+      // - Total dual-edge count > 50 stroke pixels
+      const isSubFrame = strokeRatio > 0.0008
+        && windowDensityRatio > 0.006
+        && dualEdgeOutlineCount > 50;
+
+      return { isSubFrame, strokeRatio, windowDensityRatio, score, frameIsEmpty, canvas };
     } catch (e) {
-      return { textRatio: 0, borderRatio: 0, shadowRatio: 0, score: 0, frameIsEmpty: true, canvas: null };
+      return { isSubFrame: false, strokeRatio: 0, windowDensityRatio: 0, score: 0, frameIsEmpty: true, canvas: null };
     }
   }
 
   // ================================================================
-  // MAIN HARDSUB ANALYSIS ENGINE — Continuous Playback + Audio Gating
-  //
-  // Plays the video at 4x speed through 4 segments. On each
-  // ontimeupdate, measures audio amplitude and (if loud enough)
-  // analyzes the frame for subtitle text. Both audio and visual
-  // analysis happen in the SAME continuous playback pass.
+  // MAIN HARDSUB ANALYSIS ENGINE — Continuous Playback + Speech Gating
   // ================================================================
   async analyzeVideoFrameSubtitles(file) {
     return new Promise((resolve) => {
@@ -222,24 +273,21 @@ class MediaScanner {
         URL.revokeObjectURL(objectUrl);
         resolve({
           hasHardsubs,
-          confidence: hasHardsubs ? 0.92 : (totalFramesAnalyzed > 5 ? 0.80 : 0.50),
+          confidence: hasHardsubs ? 0.95 : (totalFramesAnalyzed > 8 ? 0.85 : 0.50),
           frameDataUrl: capturedDataUrl
         });
       };
 
-      // 15 second hard cap
+      // 15 second max hard cap
       const masterTimer = setTimeout(() => {
-        done(detectedCount >= 1 || maxScore > 0.015);
+        done(detectedCount >= 2 || maxScore > 0.08);
       }, 15000);
 
       const video = document.createElement('video');
       video.playsInline = true;
       video.preload = 'auto';
-      // NOT muted — required so AudioContext can read audio
       video.src = objectUrl;
 
-      // ---- AudioContext setup ----
-      // GainNode at 0 = audio processed but silent (no speaker output)
       let analyser = null;
       let freqData = null;
       let audioGatingEnabled = false;
@@ -248,7 +296,7 @@ class MediaScanner {
       try {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 256; // 128 frequency bins
+        analyser.fftSize = 256;
         const gain = audioCtx.createGain();
         gain.gain.value = 0; // silent
         const source = audioCtx.createMediaElementSource(video);
@@ -258,24 +306,17 @@ class MediaScanner {
         freqData = new Uint8Array(analyser.frequencyBinCount);
         audioGatingEnabled = true;
       } catch (e) {
-        // AudioContext unavailable — will analyze all frames without audio gating
-        // Must mute the video so play() works under autoplay policy
         video.muted = true;
         audioGatingEnabled = false;
       }
 
-      // Speech detection threshold:
-      // frequencyBinCount=128 with sampleRate ~44100Hz: bin i ≈ i × 344 Hz
-      // We care about bins 1–12 ≈ 344Hz to ~4kHz (core speech range)
       const SPEECH_BIN_START = 1;
       const SPEECH_BIN_END   = 12;
-      const SPEECH_THRESHOLD = 18; // 0–255 scale; 18 is a quiet-but-present voice
+      const SPEECH_THRESHOLD = 20;
 
-      // Segments: fraction of total duration at which we start each burst
-      // Spread across the movie body (skip intro/credits)
-      const SEGMENT_STARTS  = [0.14, 0.36, 0.58, 0.78];
-      const MAX_FRAMES_PER_SEGMENT = 18; // max timeupdate events per segment
-      const PLAYBACK_RATE = 4; // 4x = 1 real-second covers 4 video-seconds
+      const SEGMENT_STARTS = [0.14, 0.36, 0.58, 0.78];
+      const MAX_FRAMES_PER_SEGMENT = 18;
+      const PLAYBACK_RATE = 4;
 
       let duration = 600;
       let segIdx = 0;
@@ -301,7 +342,7 @@ class MediaScanner {
         video.pause();
         segIdx++;
         if (segIdx >= SEGMENT_STARTS.length) {
-          finish(detectedCount >= 1);
+          finish(detectedCount >= 2 || maxScore > 0.08);
           return;
         }
         segFrameCount = 0;
@@ -316,7 +357,6 @@ class MediaScanner {
         }
         video.playbackRate = PLAYBACK_RATE;
         video.play().catch(() => {
-          // play() rejected — try muted (sacrifices audio gating for this segment)
           audioGatingEnabled = false;
           video.muted = true;
           video.play().catch(() => goToNextSegment());
@@ -328,20 +368,17 @@ class MediaScanner {
 
         segFrameCount++;
 
-        // Too many empty frames = probably a black scene, skip segment
         if (emptyFrameCount > 5 && segFrameCount > 8) {
           goToNextSegment();
           return;
         }
 
-        // Hit segment frame cap — move to next segment
         if (segFrameCount > MAX_FRAMES_PER_SEGMENT) {
           goToNextSegment();
           return;
         }
 
-        // ---- AUDIO GATE ----
-        // If AudioContext is working, only analyze frames where speech is detected
+        // AUDIO GATE: Only evaluate frames when speech audio amplitude is detected
         if (audioGatingEnabled && analyser && freqData) {
           analyser.getByteFrequencyData(freqData);
           let speechSum = 0;
@@ -349,12 +386,10 @@ class MediaScanner {
             speechSum += freqData[i];
           }
           const speechLevel = speechSum / (SPEECH_BIN_END - SPEECH_BIN_START + 1);
-          if (speechLevel < SPEECH_THRESHOLD) {
-            return; // quiet frame — skip visual analysis
-          }
+          if (speechLevel < SPEECH_THRESHOLD) return;
         }
 
-        // ---- VISUAL FRAME ANALYSIS ----
+        // VISUAL FRAME ANALYSIS
         const result = this._analyzeFramePixels(video);
 
         if (result.frameIsEmpty) {
@@ -364,7 +399,6 @@ class MediaScanner {
 
         totalFramesAnalyzed++;
 
-        // Save the frame with the highest subtitle score for thumbnail
         if (result.score > maxScore || !capturedDataUrl) {
           maxScore = result.score;
           if (result.canvas) {
@@ -372,13 +406,9 @@ class MediaScanner {
           }
         }
 
-        // DETECTION: bright text + dark contrast edge in subtitle zone
-        const isPositive = result.textRatio > 0.0018
-          && (result.borderRatio > 0.0003 || result.shadowRatio > 0.0008);
-
-        if (isPositive) {
+        if (result.isSubFrame) {
           detectedCount++;
-          // Early exit: 2 positive detections = high confidence
+          // Require at least 2 distinct positive frames across playback to confirm hardsubs
           if (detectedCount >= 2) {
             finish(true);
           }
@@ -401,7 +431,7 @@ class MediaScanner {
   }
 
   /**
-   * Execute batch scan with live progress updates & audio-targeted multi-frame analysis
+   * Execute batch scan with live progress updates & high-precision multi-source analysis
    */
   async scanBatch(scanData, onProgress, onFileComplete) {
     const videoFiles = scanData.videoFiles || (Array.isArray(scanData) ? scanData : []);
@@ -429,13 +459,23 @@ class MediaScanner {
         });
       }
 
+      // 1. Container Softsub Metadata Parsing (MKV/MP4 headers via WASM / Native Parser)
       const analysis = await window.mediaInfoEngine.analyzeFile(file);
+
+      // 2. Matching Sidecar Subtitle Files (.srt, .vtt, .ass in folder)
       const stem = this.getFileStem(file.name);
       const sidecarSubs = sidecarMap.get(stem) || [];
 
-      // Audio-gated continuous playback hardsub analysis
+      const allSubs = (analysis && analysis.subtitles) ? analysis.subtitles : [];
+      const fullSoftTracks = allSubs.filter(s => !s.isForced && !/(forced|foreign|partial|narrative)/i.test(s.title || ''));
+      const hasFullSoft = fullSoftTracks.length > 0 || (analysis && analysis.hasSubtitles);
+
+      // 3. High-Precision Visual Hardsub Detection (Burned-in subtitles in frame image)
       const visualRes = await this.analyzeVideoFrameSubtitles(file);
-      const subStatus = visualRes.hasHardsubs ? 'has-subs' : 'no-subs';
+
+      // OVERALL SUBTITLE STATUS: Present if ANY source has subtitles
+      const hasAnySubtitles = hasFullSoft || sidecarSubs.length > 0 || visualRes.hasHardsubs;
+      const subStatus = hasAnySubtitles ? 'has-subs' : 'no-subs';
 
       const mediaRecord = {
         id: `media_${Date.now()}_${i}`,
@@ -448,7 +488,9 @@ class MediaScanner {
         subStatus,
         sidecarSubs,
         thumbnailDataUrl: visualRes.frameDataUrl,
-        hasHardsubs: visualRes.hasHardsubs
+        hasHardsubs: visualRes.hasHardsubs,
+        hasSoftsubs: hasFullSoft,
+        hasSidecar: sidecarSubs.length > 0
       };
 
       results.push(mediaRecord);
